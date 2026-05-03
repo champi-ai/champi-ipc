@@ -41,7 +41,7 @@ class SignalData:
         data: Dictionary containing signal-specific data
     """
 
-    signal_type: Any  # Should be SignalTypeProtocol but causes typing issues
+    signal_type: SignalTypeProtocol  # type: ignore[assignment]  # runtime IntEnum, not statically checkable
     seq_num: int
     data: dict[str, Any]
 

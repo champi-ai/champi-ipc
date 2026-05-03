@@ -111,3 +111,5 @@ workflow.db
 # Runtime files
 *.pid
 *.lock
+excalidraw.log
+

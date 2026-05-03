@@ -85,9 +85,10 @@ class SignalReader:
                     logger.debug(f"No memory region for {signal_type.name}: {e}")
                     continue
 
-                # Check if memory is uninitialized (signal_type byte at position 8 is 0)
-                if len(raw_data) < 9 or raw_data[8] == 0:
-                    continue  # Skip uninitialized memory
+                # Skip uninitialized memory: all structs start with a uint64 seq_num (=Q);
+                # a zero seq_num means no signal has been written to this region yet.
+                if len(raw_data) < 8 or struct.unpack_from('=Q', raw_data)[0] == 0:
+                    continue
 
                 # Unpack struct
                 try:
