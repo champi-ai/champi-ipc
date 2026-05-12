@@ -6,14 +6,14 @@ from champi_ipc.base.exceptions import (
     RegionNotFoundError,
     SignalTypeNotRegisteredError,
 )
-from champi_ipc.base.protocols import SignalTypeProtocol
-from champi_ipc.base.struct_registry import StructRegistry
+from champi_ipc.base.protocols import SignalData, SignalTypeProtocol, StructRegistry
 
 __all__ = [
-    "IPCError",
-    "RegionExistsError",
-    "RegionNotFoundError",
-    "SignalTypeNotRegisteredError",
     "SignalTypeProtocol",
     "StructRegistry",
+    "SignalData",
+    "IPCError",
+    "RegionNotFoundError",
+    "RegionExistsError",
+    "SignalTypeNotRegisteredError",
 ]
