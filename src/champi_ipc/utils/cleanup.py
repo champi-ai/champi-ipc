@@ -1,119 +1,227 @@
-"""Utilities for listing and cleaning up orphaned shared memory regions."""
+"""Shared memory cleanup utilities for champi services.
+
+On Linux, POSIX shared memory regions are visible as files under
+``/dev/shm``.  These utilities operate on that directory directly using
+:mod:`pathlib`, which is simpler and more reliable than going through
+:class:`multiprocessing.shared_memory.SharedMemory` for bulk operations.
+
+macOS note
+----------
+macOS does not expose POSIX shared memory regions as files in a
+predictable location accessible to ordinary processes.  Functions that
+require filesystem enumeration (:func:`list_regions`,
+:func:`cleanup_orphaned_regions`) emit a :class:`RuntimeWarning` and
+return empty results on macOS.  :func:`get_region_info` falls back to
+probing via :class:`multiprocessing.shared_memory.SharedMemory` and
+works on any platform where the region name is known in advance.
+"""
 
 from __future__ import annotations
 
-import os
 import platform
-from dataclasses import dataclass, field
-from multiprocessing import shared_memory
+import sys
+import warnings
+from dataclasses import dataclass
+from multiprocessing.shared_memory import SharedMemory
+from pathlib import Path
+from typing import TypedDict
 
-from loguru import logger
+from champi_ipc.base.exceptions import RegionNotFoundError
+
+__all__ = [
+    "CleanupResult",
+    "RegionInfo",
+    "RegionNotFoundError",
+    "cleanup_orphaned_regions",
+    "get_region_info",
+    "list_regions",
+]
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+_SHM_DIR = Path("/dev/shm")
+_IS_LINUX = sys.platform.startswith("linux")
+
+
+def _shm_dir_available() -> bool:
+    """Return True when /dev/shm is accessible on this platform."""
+    return _IS_LINUX and _shm_dir_available._checked  # type: ignore[attr-defined]
+
+
+# Evaluate once at import time.
+_shm_dir_available._checked = _IS_LINUX and _SHM_DIR.is_dir()  # type: ignore[attr-defined]
+
+
+def _warn_macos() -> None:
+    warnings.warn(
+        "Shared memory enumeration via /dev/shm is not available on this "
+        "platform.  list_regions() and cleanup_orphaned_regions() are no-ops.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public data types
+# ---------------------------------------------------------------------------
+
+
+class RegionInfo(TypedDict):
+    """Information about a single shared memory region.
+
+    Attributes:
+        name: The region name (as passed to ``SharedMemory(name=...)``).
+        size: Size in bytes, or ``0`` when the size cannot be determined.
+        mtime: Last-modified time as a POSIX timestamp, or ``None`` when
+            the backing file is not accessible.
+        exists: ``True`` when the region can be opened for reading.
+    """
+
+    name: str
+    size: int
+    mtime: float | None
+    exists: bool
 
 
 @dataclass
 class CleanupResult:
-    """Result of a cleanup operation.
+    """Outcome of a :func:`cleanup_orphaned_regions` call.
 
     Attributes:
-        removed: Names of regions that were successfully removed.
-        failed: Names of regions that could not be removed.
+        removed: Names of regions that were successfully unlinked.
+        failed: Mapping of region name to the exception that prevented removal.
     """
 
-    removed: list[str] = field(default_factory=list)
-    failed: list[str] = field(default_factory=list)
-
-    @property
-    def total_removed(self) -> int:
-        """Total number of successfully removed regions."""
-        return len(self.removed)
-
-    @property
-    def total_failed(self) -> int:
-        """Total number of regions that could not be removed."""
-        return len(self.failed)
+    removed: list[str]
+    failed: dict[str, Exception]
 
 
-def list_regions(prefix: str) -> list[str]:
-    """Return names of all shared memory regions whose names start with *prefix*.
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
-    Currently supports Linux only (reads ``/dev/shm``).  On other platforms
-    an empty list is returned.
+
+def list_regions(prefix: str = "") -> list[str]:
+    """Return the names of all POSIX shared memory regions matching *prefix*.
+
+    On Linux the function scans ``/dev/shm`` and returns the filename of
+    every entry whose name starts with *prefix*.  On other platforms it
+    emits a :class:`RuntimeWarning` and returns an empty list.
 
     Args:
-        prefix: Region name prefix to filter on.
+        prefix: Optional name prefix to filter by.  Pass an empty string
+            (the default) to list every region in ``/dev/shm``.
 
     Returns:
-        Sorted list of matching region names (without path components).
+        Sorted list of matching region names, without a leading ``/``.
     """
-    system = platform.system()
-    regions: list[str] = []
+    if not _shm_dir_available():
+        _warn_macos()
+        return []
 
-    if system == "Linux":
-        shm_dir = "/dev/shm"
-        if os.path.isdir(shm_dir):
-            for name in os.listdir(shm_dir):
-                if name.startswith(prefix):
-                    regions.append(name)
-    else:
-        logger.debug(
-            "list_regions: unsupported platform {!r} — returning empty list", system
+    names = [
+        entry.name
+        for entry in _SHM_DIR.iterdir()
+        if entry.is_file() and entry.name.startswith(prefix)
+    ]
+    return sorted(names)
+
+
+def get_region_info(name: str) -> RegionInfo:
+    """Return size, mtime, and existence flag for a named shared memory region.
+
+    On Linux the function reads metadata from ``/dev/shm/<name>``.  On
+    other platforms it attempts to open the region via
+    :class:`multiprocessing.shared_memory.SharedMemory`; size is available
+    but mtime is not.
+
+    Args:
+        name: The region name, without a leading ``/``.
+
+    Returns:
+        A :class:`RegionInfo` dict with keys ``name``, ``size``,
+        ``mtime``, and ``exists``.
+
+    Raises:
+        RegionNotFoundError: When no region with the given name exists.
+    """
+    if _shm_dir_available():
+        path = _SHM_DIR / name
+        if not path.exists():
+            raise RegionNotFoundError(name)
+        stat = path.stat()
+        return RegionInfo(
+            name=name,
+            size=stat.st_size,
+            mtime=stat.st_mtime,
+            exists=True,
         )
 
-    return sorted(regions)
-
-
-def get_region_info(region_name: str) -> dict[str, object]:
-    """Return metadata about a single shared memory region.
-
-    Args:
-        region_name: Name of the shared memory region (no path prefix).
-
-    Returns:
-        A dict with keys:
-
-        - ``name`` (str): The region name.
-        - ``exists`` (bool): Whether the region exists and is accessible.
-        - ``size`` (int): Byte size, or 0 if the region does not exist.
-    """
-    info: dict[str, object] = {"name": region_name, "exists": False, "size": 0}
+    # Non-Linux fallback: probe via the SharedMemory API.
     try:
-        shm = shared_memory.SharedMemory(name=region_name, create=False)
-        info["exists"] = True
-        info["size"] = shm.size
-        shm.close()
+        shm = SharedMemory(name=name, create=False)
     except FileNotFoundError:
-        pass
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not inspect region {!r}: {}", region_name, exc)
-    return info
+        raise RegionNotFoundError(name) from None
+    size = shm.size
+    shm.close()
+    return RegionInfo(name=name, size=size, mtime=None, exists=True)
 
 
 def cleanup_orphaned_regions(prefix: str) -> CleanupResult:
-    """Remove all shared memory regions whose names start with *prefix*.
+    """Remove all POSIX shared memory regions whose name starts with *prefix*.
 
-    Intended to clean up regions left behind by crashed processes.  Safe
-    to call even when no matching regions exist.
+    The function does not attempt to detect whether a region is still in
+    use; it removes every region matching the prefix.  Callers are
+    responsible for ensuring that no live process holds the region open
+    before calling this function.
+
+    On Linux, each matching entry in ``/dev/shm`` is unlinked directly via
+    :func:`pathlib.Path.unlink`.  On other platforms the function emits a
+    :class:`RuntimeWarning` and returns an empty :class:`CleanupResult`.
 
     Args:
-        prefix: Region name prefix to match.
+        prefix: Name prefix that identifies regions belonging to a champi
+            service (e.g. ``"champi_"``).  Must be a non-empty string.
 
     Returns:
-        :class:`CleanupResult` describing what was removed and what failed.
+        A :class:`CleanupResult` with the names of successfully removed
+        regions and a mapping of names to exceptions for any failures.
+
+    Raises:
+        ValueError: When *prefix* is an empty string, to prevent
+            accidentally unlinking unrelated system-wide regions.
     """
-    result = CleanupResult()
+    if not prefix:
+        raise ValueError("prefix must be a non-empty string")
 
-    for name in list_regions(prefix):
+    if not _shm_dir_available():
+        _warn_macos()
+        return CleanupResult(removed=[], failed={})
+
+    result = CleanupResult(removed=[], failed={})
+    for entry in _SHM_DIR.iterdir():
+        if not entry.is_file():
+            continue
+        if not entry.name.startswith(prefix):
+            continue
         try:
-            shm = shared_memory.SharedMemory(name=name, create=False)
-            shm.close()
-            shm.unlink()
-            result.removed.append(name)
-            logger.info("Removed orphaned region: {}", name)
-        except FileNotFoundError:
-            # Already gone — count as removed.
-            result.removed.append(name)
-        except Exception as exc:  # noqa: BLE001
-            result.failed.append(name)
-            logger.warning("Failed to remove region {!r}: {}", name, exc)
+            entry.unlink()
+            result.removed.append(entry.name)
+        except OSError as exc:
+            result.failed[entry.name] = exc
 
+    result.removed.sort()
     return result
+
+
+# ---------------------------------------------------------------------------
+# Platform info helper (used by tests)
+# ---------------------------------------------------------------------------
+
+
+def _running_on_linux() -> bool:
+    """Return True when the current platform is Linux."""
+    return platform.system() == "Linux"

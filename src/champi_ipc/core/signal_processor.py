@@ -1,10 +1,12 @@
-"""SignalProcessor — bridges blinker signals to shared memory writes."""
+"""Signal processor - bridges blinker signals to shared memory via FIFO queue.
 
-from __future__ import annotations
+This module connects blinker signals to the shared memory IPC infrastructure,
+queuing signals and processing them in a background thread.
+"""
 
 import threading
 from collections.abc import Callable
-from typing import Any, SupportsInt
+from typing import Any, TypeVar
 
 from blinker import Signal
 from loguru import logger
