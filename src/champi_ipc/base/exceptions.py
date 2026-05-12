@@ -2,16 +2,30 @@
 
 
 class IPCError(Exception):
-    """Base exception for all champi-ipc errors."""
+    """Base exception for IPC errors."""
+
+    pass
 
 
 class RegionNotFoundError(IPCError):
-    """Raised when a shared memory region does not exist."""
+    """Raised when a shared memory region does not exist.
+
+    Args:
+        name: The region name that was not found.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"Shared memory region not found: {name!r}")
 
 
 class RegionExistsError(IPCError):
-    """Raised when a shared memory region already exists."""
+    """Shared memory region already exists."""
+
+    pass
 
 
 class SignalTypeNotRegisteredError(IPCError):
-    """Raised when a signal type has no entry in the StructRegistry."""
+    """Signal type not registered in struct registry."""
+
+    pass
