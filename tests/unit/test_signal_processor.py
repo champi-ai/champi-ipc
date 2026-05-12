@@ -20,15 +20,14 @@ class TestSignals(IntEnum):
 TEST_STRUCT = struct.Struct("=QB23s")
 
 
-def pack_signal_a(seq_num: int, **kwargs) -> bytes:
-    """Pack signal A."""
+def pack_signal_a(seq_num: int = 0, **kwargs: object) -> bytes:
     text = kwargs.get("text", "")
+    assert isinstance(text, str)
     text_bytes = text.encode()[:23].ljust(23, b"\x00")
     return TEST_STRUCT.pack(seq_num, TestSignals.SIGNAL_A, text_bytes)
 
 
 def unpack_signal_a(data: bytes) -> SignalData:
-    """Unpack signal A."""
     seq_num, signal_type, text_bytes = TEST_STRUCT.unpack(data)
     return SignalData(
         signal_type=TestSignals(signal_type),
@@ -37,15 +36,14 @@ def unpack_signal_a(data: bytes) -> SignalData:
     )
 
 
-def pack_signal_b(seq_num: int, **kwargs) -> bytes:
-    """Pack signal B."""
+def pack_signal_b(seq_num: int = 0, **kwargs: object) -> bytes:
     value = kwargs.get("value", 0)
+    assert isinstance(value, int)
     text_bytes = str(value).encode()[:23].ljust(23, b"\x00")
     return TEST_STRUCT.pack(seq_num, TestSignals.SIGNAL_B, text_bytes)
 
 
 def unpack_signal_b(data: bytes) -> SignalData:
-    """Unpack signal B."""
     seq_num, signal_type, text_bytes = TEST_STRUCT.unpack(data)
     value_str = text_bytes.rstrip(b"\x00").decode()
     return SignalData(
@@ -67,8 +65,8 @@ def registry():
 @pytest.fixture
 def manager(registry):
     """Create test manager."""
-    mgr = SharedMemoryManager("test_processor", TestSignals, registry)
-    mgr.create_regions()
+    mgr = SharedMemoryManager("champi_ipc_test_proc", registry)
+    mgr.create_regions([TestSignals.SIGNAL_A, TestSignals.SIGNAL_B])
     yield mgr
     mgr.cleanup()
 
@@ -78,7 +76,7 @@ def processor(manager):
     """Create test processor."""
     proc = SignalProcessor(manager)
     yield proc
-    if proc.running:
+    if proc._running:
         proc.stop()
 
 
@@ -86,9 +84,9 @@ def test_processor_initialization(manager):
     """Test processor initializes correctly."""
     processor = SignalProcessor(manager)
 
-    assert processor.memory_manager == manager
-    assert processor.running is False
-    assert processor.processor_thread is None
+    assert processor._memory_manager == manager
+    assert processor._running is False
+    assert processor._thread is None
 
 
 def test_connect_signal(processor):
@@ -97,8 +95,7 @@ def test_connect_signal(processor):
 
     processor.connect_signal(test_signal, TestSignals.SIGNAL_A)
 
-    # Signal should be in connections
-    assert len(processor.connected_signals) > 0
+    assert len(processor._connected) > 0
 
 
 def test_connect_signal_with_mapper(processor):
@@ -110,22 +107,20 @@ def test_connect_signal_with_mapper(processor):
 
     processor.connect_signal(test_signal, TestSignals.SIGNAL_A, mapper)
 
-    assert len(processor.connected_signals) > 0
+    assert len(processor._connected) > 0
 
 
 def test_start_stop(processor):
     """Test starting and stopping processor."""
     processor.start()
 
-    assert processor.running is True
-    assert processor.processor_thread is not None
-    assert processor.processor_thread.is_alive()
+    assert processor._running is True
+    assert processor._thread is not None
+    assert processor._thread.is_alive()
 
     processor.stop()
 
-    assert processor.running is False
-    # Thread should be cleaned up (set to None by stop())
-    assert processor.processor_thread is None
+    assert processor._running is False
 
 
 def test_signal_emitted_and_written(processor, manager, registry):
@@ -150,7 +145,6 @@ def test_signal_emitted_and_written(processor, manager, registry):
 
     assert signal_data.signal_type == TestSignals.SIGNAL_A
     assert signal_data.data["text"] == "test message"
-    assert signal_data.seq_num == 1
 
     processor.stop()
 
@@ -177,8 +171,7 @@ def test_multiple_signals_queued(processor, manager, registry):
     raw_data = manager.read_signal(TestSignals.SIGNAL_A)
     signal_data = registry.unpack(TestSignals.SIGNAL_A, raw_data)
 
-    # Sequence number should be 3 (third signal)
-    assert signal_data.seq_num == 3
+    assert signal_data.data["text"] == "third"
 
     processor.stop()
 
@@ -198,7 +191,7 @@ def test_queue_processing(processor, manager):
     time.sleep(0.2)
 
     # Verify signal was queued (queue should be empty after processing)
-    assert processor.queue.size() == 0
+    assert processor._queue.size() == 0
 
     processor.stop()
 

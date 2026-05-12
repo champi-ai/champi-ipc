@@ -47,7 +47,9 @@ _PREFIX = "test_sr_champi"
 
 
 def _setup_manager(prefix: str, sig: Sig, value: int) -> SharedMemoryManager[Sig]:
-    mgr: SharedMemoryManager[Sig] = SharedMemoryManager(prefix=prefix, registry=_registry())
+    mgr: SharedMemoryManager[Sig] = SharedMemoryManager(
+        prefix=prefix, registry=_registry()
+    )
     mgr.create_regions([sig])
     mgr.write_signal(sig, _pack(value=value))
     return mgr

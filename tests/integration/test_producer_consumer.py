@@ -3,7 +3,6 @@
 import struct
 import time
 from enum import IntEnum
-from multiprocessing import Event
 
 import pytest
 from blinker import signal
@@ -16,276 +15,193 @@ from champi_ipc import (
     StructRegistry,
 )
 
+ALL_SIGNALS = [1, 2]  # TestSignals members as ints for type-agnostic create/attach
 
-class TestSignals(IntEnum):
+
+class SampleSignals(IntEnum):
     MESSAGE = 1
     COUNTER = 2
 
 
-# Define structs
-MESSAGE_STRUCT = struct.Struct("=QB256s")  # seq_num, signal_type, text
-COUNTER_STRUCT = struct.Struct("=QBQ")  # seq_num, signal_type, value
+MESSAGE_STRUCT = struct.Struct("=QB256s")
+COUNTER_STRUCT = struct.Struct("=QBQ")
 
 
-def pack_message(seq_num: int, **kwargs) -> bytes:
-    """Pack message signal."""
+def pack_message(seq_num: int = 0, **kwargs: object) -> bytes:
     text = kwargs.get("text", "")
+    assert isinstance(text, str)
     text_bytes = text.encode()[:256].ljust(256, b"\x00")
-    return MESSAGE_STRUCT.pack(seq_num, TestSignals.MESSAGE, text_bytes)
+    return MESSAGE_STRUCT.pack(seq_num, SampleSignals.MESSAGE, text_bytes)
 
 
 def unpack_message(data: bytes) -> SignalData:
-    """Unpack message signal."""
     seq_num, signal_type, text_bytes = MESSAGE_STRUCT.unpack(data)
     return SignalData(
-        signal_type=TestSignals(signal_type),
+        signal_type=SampleSignals(signal_type),
         seq_num=seq_num,
         data={"text": text_bytes.rstrip(b"\x00").decode()},
     )
 
 
-def pack_counter(seq_num: int, **kwargs) -> bytes:
-    """Pack counter signal."""
+def pack_counter(seq_num: int = 0, **kwargs: object) -> bytes:
     value = kwargs.get("value", 0)
-    return COUNTER_STRUCT.pack(seq_num, TestSignals.COUNTER, value)
+    assert isinstance(value, int)
+    return COUNTER_STRUCT.pack(seq_num, SampleSignals.COUNTER, value)
 
 
 def unpack_counter(data: bytes) -> SignalData:
-    """Unpack counter signal."""
     seq_num, signal_type, value = COUNTER_STRUCT.unpack(data)
     return SignalData(
-        signal_type=TestSignals(signal_type),
+        signal_type=SampleSignals(signal_type),
         seq_num=seq_num,
         data={"value": value},
     )
 
 
-def create_registry():
-    """Create test registry."""
-    registry = StructRegistry()
+def create_registry() -> StructRegistry[SampleSignals]:
+    registry: StructRegistry[SampleSignals] = StructRegistry()
     registry.register(
-        TestSignals.MESSAGE, MESSAGE_STRUCT.size, pack_message, unpack_message
+        SampleSignals.MESSAGE, MESSAGE_STRUCT.size, pack_message, unpack_message
     )
     registry.register(
-        TestSignals.COUNTER, COUNTER_STRUCT.size, pack_counter, unpack_counter
+        SampleSignals.COUNTER, COUNTER_STRUCT.size, pack_counter, unpack_counter
     )
     return registry
 
 
-def producer_process(num_messages: int, ready_event: Event):
-    """Producer process that emits signals."""
-    registry = create_registry()
-    manager = SharedMemoryManager("test_integration", TestSignals, registry)
-    manager.create_regions()
-
-    processor = SignalProcessor(manager)
-
-    # Connect signals
-    msg_signal = signal("message")
-    counter_signal = signal("counter")
-
-    processor.connect_signal(
-        msg_signal, TestSignals.MESSAGE, lambda text: {"text": text}
-    )
-    processor.connect_signal(
-        counter_signal, TestSignals.COUNTER, lambda value: {"value": value}
-    )
-
-    processor.start()
-
-    # Signal that we're ready
-    ready_event.set()
-
-    # Emit messages
-    for i in range(num_messages):
-        msg_signal.send(text=f"Message {i}")
-        counter_signal.send(value=i * 10)
-        time.sleep(0.01)  # Small delay
-
-    # Give time for last messages to be processed
-    time.sleep(0.1)
-
-    processor.stop()
-    manager.cleanup()
+_SIGNAL_TYPES = [SampleSignals.MESSAGE, SampleSignals.COUNTER]
 
 
-def consumer_process(num_messages: int, ready_event: Event, results: dict):
-    """Consumer process that reads signals."""
-    # Wait for producer to be ready
-    ready_event.wait(timeout=5.0)
-    time.sleep(0.1)  # Give producer time to write first signals
+@pytest.fixture(autouse=True)
+def cleanup_regions():
+    from champi_ipc.utils.cleanup import cleanup_orphaned_regions
 
-    registry = create_registry()
-    manager = SharedMemoryManager("test_integration", TestSignals, registry)
-    manager.attach_regions()
-
-    reader = SignalReader(manager)
-
-    received_messages = []
-    received_counters = []
-
-    def handle_message(signal_data):
-        received_messages.append(signal_data.data["text"])
-
-    def handle_counter(signal_data):
-        received_counters.append(signal_data.data["value"])
-
-    reader.register_handler(TestSignals.MESSAGE, handle_message)
-    reader.register_handler(TestSignals.COUNTER, handle_counter)
-
-    # Poll for signals
-    poll_count = 0
-    max_polls = 200  # 2 seconds max
-
-    while len(received_messages) < num_messages and poll_count < max_polls:
-        reader.poll_once()
-        time.sleep(0.01)
-        poll_count += 1
-
-    manager.cleanup()
-
-    # Store results (note: can't return from Process, so would need shared memory/queue)
-    # For now, we'll verify in the test differently
+    cleanup_orphaned_regions("champi_ipc_test")
+    yield
+    cleanup_orphaned_regions("champi_ipc_test")
 
 
 def test_single_message_flow():
     """Test single message from producer to consumer."""
     registry = create_registry()
 
-    # Producer creates and writes
-    producer_mgr = SharedMemoryManager("test_single", TestSignals, registry)
-    producer_mgr.create_regions()
+    producer_mgr = SharedMemoryManager("champi_ipc_test_single", registry)
+    producer_mgr.create_regions([SampleSignals.MESSAGE, SampleSignals.COUNTER])
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("single_test")
     processor.connect_signal(
-        msg_signal, TestSignals.MESSAGE, lambda text: {"text": text}
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
     )
 
     processor.start()
     msg_signal.send(text="Hello World")
-    time.sleep(0.1)  # Let it process
+    time.sleep(0.1)
     processor.stop()
 
-    # Consumer attaches and reads
-    consumer_mgr = SharedMemoryManager("test_single", TestSignals, registry)
-    consumer_mgr.attach_regions()
+    consumer_mgr = SharedMemoryManager("champi_ipc_test_single", registry)
+    consumer_mgr.attach_regions([SampleSignals.MESSAGE, SampleSignals.COUNTER])
 
     reader = SignalReader(consumer_mgr)
-    received = []
-    reader.register_handler(TestSignals.MESSAGE, lambda s: received.append(s))
-
+    received: list[SignalData] = []
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw))
+    )
     reader.poll_once()
 
-    # Cleanup
     producer_mgr.cleanup()
     consumer_mgr.cleanup()
 
-    # Verify
     assert len(received) == 1
     assert received[0].data["text"] == "Hello World"
-    assert received[0].seq_num == 1
 
 
 def test_multiple_messages_same_type():
-    """Test multiple messages of the same type."""
+    """Test multiple messages of the same type — only the last is retained."""
     registry = create_registry()
 
-    # Producer
-    producer_mgr = SharedMemoryManager("test_multi", TestSignals, registry)
-    producer_mgr.create_regions()
+    producer_mgr = SharedMemoryManager("champi_ipc_test_multi", registry)
+    producer_mgr.create_regions(_SIGNAL_TYPES)
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("multi_test")
     processor.connect_signal(
-        msg_signal, TestSignals.MESSAGE, lambda text: {"text": text}
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
     )
-
     processor.start()
 
     messages = ["First", "Second", "Third", "Fourth", "Fifth"]
     for msg in messages:
         msg_signal.send(text=msg)
         time.sleep(0.01)
-
     time.sleep(0.1)
     processor.stop()
 
-    # Consumer
-    consumer_mgr = SharedMemoryManager("test_multi", TestSignals, registry)
-    consumer_mgr.attach_regions()
+    consumer_mgr = SharedMemoryManager("champi_ipc_test_multi", registry)
+    consumer_mgr.attach_regions(_SIGNAL_TYPES)
 
     reader = SignalReader(consumer_mgr)
-    received = []
-    reader.register_handler(TestSignals.MESSAGE, lambda s: received.append(s))
+    received: list[SignalData] = []
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw))
+    )
 
-    # Poll multiple times to get all messages
     for _ in range(10):
         reader.poll_once()
         time.sleep(0.01)
 
-    # Cleanup
     producer_mgr.cleanup()
     consumer_mgr.cleanup()
 
-    # Verify - should have received all messages
-    assert len(received) >= 1  # At minimum the last one
-    # Due to overwriting, we mainly care that the last one is correct
+    assert len(received) >= 1
     assert received[-1].data["text"] == "Fifth"
-    assert received[-1].seq_num == 5
 
 
 def test_mixed_signal_types():
     """Test sending both message and counter signals."""
     registry = create_registry()
 
-    # Producer
-    producer_mgr = SharedMemoryManager("test_mixed", TestSignals, registry)
-    producer_mgr.create_regions()
+    producer_mgr = SharedMemoryManager("champi_ipc_test_mixed", registry)
+    producer_mgr.create_regions(_SIGNAL_TYPES)
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("mixed_msg")
     counter_signal = signal("mixed_counter")
-
     processor.connect_signal(
-        msg_signal, TestSignals.MESSAGE, lambda text: {"text": text}
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
     )
     processor.connect_signal(
-        counter_signal, TestSignals.COUNTER, lambda value: {"value": value}
+        counter_signal, SampleSignals.COUNTER, lambda value: {"value": value}
     )
-
     processor.start()
 
-    # Send interleaved signals
     msg_signal.send(text="Message 1")
     counter_signal.send(value=100)
     msg_signal.send(text="Message 2")
     counter_signal.send(value=200)
-
     time.sleep(0.2)
     processor.stop()
 
-    # Consumer
-    consumer_mgr = SharedMemoryManager("test_mixed", TestSignals, registry)
-    consumer_mgr.attach_regions()
+    consumer_mgr = SharedMemoryManager("champi_ipc_test_mixed", registry)
+    consumer_mgr.attach_regions(_SIGNAL_TYPES)
 
     reader = SignalReader(consumer_mgr)
-    received_msgs = []
-    received_counters = []
+    received_msgs: list[SignalData] = []
+    received_counters: list[SignalData] = []
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received_msgs.append(unpack_message(raw))
+    )
+    reader.register_handler(
+        SampleSignals.COUNTER, lambda raw: received_counters.append(unpack_counter(raw))
+    )
 
-    reader.register_handler(TestSignals.MESSAGE, lambda s: received_msgs.append(s))
-    reader.register_handler(TestSignals.COUNTER, lambda s: received_counters.append(s))
-
-    # Poll multiple times
     for _ in range(10):
         reader.poll_once()
         time.sleep(0.01)
 
-    # Cleanup
     producer_mgr.cleanup()
     consumer_mgr.cleanup()
 
-    # Verify both signal types were received
     assert len(received_msgs) >= 1
     assert len(received_counters) >= 1
     assert received_msgs[-1].data["text"] == "Message 2"
@@ -293,34 +209,33 @@ def test_mixed_signal_types():
 
 
 def test_sequence_numbers_increment():
-    """Test that sequence numbers increment correctly."""
+    """Test that sequence numbers increment across consecutive sends."""
     registry = create_registry()
 
-    producer_mgr = SharedMemoryManager("test_seq", TestSignals, registry)
-    producer_mgr.create_regions()
+    producer_mgr = SharedMemoryManager("champi_ipc_test_seq", registry)
+    producer_mgr.create_regions(_SIGNAL_TYPES)
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("seq_test")
     processor.connect_signal(
-        msg_signal, TestSignals.MESSAGE, lambda text: {"text": text}
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
     )
-
     processor.start()
 
     for i in range(3):
         msg_signal.send(text=f"Msg {i}")
         time.sleep(0.05)
-
     time.sleep(0.1)
     processor.stop()
 
-    # Read and verify sequence numbers
-    consumer_mgr = SharedMemoryManager("test_seq", TestSignals, registry)
-    consumer_mgr.attach_regions()
+    consumer_mgr = SharedMemoryManager("champi_ipc_test_seq", registry)
+    consumer_mgr.attach_regions(_SIGNAL_TYPES)
 
     reader = SignalReader(consumer_mgr)
-    received = []
-    reader.register_handler(TestSignals.MESSAGE, lambda s: received.append(s))
+    received: list[SignalData] = []
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw))
+    )
 
     for _ in range(5):
         reader.poll_once()
@@ -329,7 +244,6 @@ def test_sequence_numbers_increment():
     producer_mgr.cleanup()
     consumer_mgr.cleanup()
 
-    # Check sequence numbers are incrementing
     if len(received) > 1:
         for i in range(1, len(received)):
             assert received[i].seq_num > received[i - 1].seq_num

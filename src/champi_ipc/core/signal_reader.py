@@ -94,7 +94,9 @@ class SignalReader[S: SupportsInt]:
                 handler(raw)
                 logger.debug(f"Dispatched signal region {key} ({len(raw)} bytes)")
             except Exception as exc:  # noqa: BLE001
-                logger.error(f"Handler error for signal region {key}: {exc}", exc_info=True)
+                logger.error(
+                    f"Handler error for signal region {key}: {exc}", exc_info=True
+                )
 
             # Write ACK with incremented sequence number.
             with self._lock:
@@ -135,7 +137,9 @@ class SignalReader[S: SupportsInt]:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self.poll_loop, daemon=True, name="SignalReader")
+        self._thread = threading.Thread(
+            target=self.poll_loop, daemon=True, name="SignalReader"
+        )
         self._thread.start()
         logger.info("SignalReader started")
 

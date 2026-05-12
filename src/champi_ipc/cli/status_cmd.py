@@ -1,62 +1,82 @@
 """Status command for champi-ipc CLI."""
 
+from __future__ import annotations
+
+import datetime
 import json
+import os
+import platform
 
 import click
-from loguru import logger
 
 from champi_ipc.utils.cleanup import get_region_info, list_regions
 
 
-@click.command()
-@click.option("--prefix", default="champi_ipc", help="Memory region prefix to check")
-@click.option("--json", "output_json", is_flag=True, help="Output in JSON format")
-def status(prefix: str, output_json: bool):
-    """Show status of shared memory regions.
+def _human_size(size: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.1f} {unit}"
+        size //= 1024
+    return f"{size:.1f} TB"
 
-    This command lists all shared memory regions with the specified prefix
-    and displays their status (size, accessibility).
 
-    Example:
-        champi-ipc status --prefix my_app
-        champi-ipc status --prefix my_app --json
-    """
+def _last_modified(region_name: str) -> str:
+    if platform.system() != "Linux":
+        return "-"
+    path = os.path.join("/dev/shm", region_name)
     try:
-        regions = list_regions(prefix)
+        mtime = os.path.getmtime(path)
+        return datetime.datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+    except OSError:
+        return "-"
 
-        if not regions:
-            click.echo(f"✅ No regions found with prefix: {prefix}")
-            return
 
-        # Gather info for each region
-        region_info = []
-        for region_name in regions:
-            info = get_region_info(region_name)
-            region_info.append(info)
+@click.command("status")
+@click.option(
+    "--prefix",
+    default="champi_",
+    show_default=True,
+    help="Filter regions by name prefix.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Output as JSON array.",
+)
+def status(prefix: str, as_json: bool) -> None:
+    """Show active shared memory regions matching PREFIX."""
+    names = list_regions(prefix)
 
-        if output_json:
-            click.echo(json.dumps(region_info, indent=2))
-        else:
-            click.echo(f"\n📊 Shared Memory Regions (prefix: {prefix})\n")
-            click.echo(f"{'Region Name':<40} {'Size':<12} {'Status':<12}")
-            click.echo("=" * 64)
+    if not names:
+        click.echo("No regions found")
+        return
 
-            for info in region_info:
-                name = info["name"]
-                size = f"{info['size']} bytes" if info["size"] > 0 else "N/A"
+    rows: list[dict[str, str | int]] = []
+    for name in names:
+        info = get_region_info(name)
+        size = info["size"]
+        rows.append(
+            {
+                "name": name,
+                "size": int(size) if isinstance(size, (int, float)) else 0,
+                "last_modified": _last_modified(name),
+            }
+        )
 
-                if info["exists"] and info["accessible"]:
-                    status_icon = "✅ Active"
-                elif info["exists"]:
-                    status_icon = "⚠️  No Access"
-                else:
-                    status_icon = "❌ Missing"
+    if as_json:
+        click.echo(json.dumps(rows, indent=2))
+        return
 
-                click.echo(f"{name:<40} {size:<12} {status_icon}")
-
-            click.echo(f"\nTotal regions: {len(region_info)}")
-
-    except Exception as e:
-        logger.error(f"Status check failed: {e}")
-        click.echo(f"❌ Error: {e}", err=True)
-        raise click.Abort() from e
+    col_name = max(len(str(r["name"])) for r in rows)
+    col_name = max(col_name, 4)
+    header = f"{'NAME':<{col_name}}  {'SIZE':>10}  LAST MODIFIED"
+    click.echo(header)
+    click.echo("-" * len(header))
+    for row in rows:
+        size_val = row["size"]
+        size_str = _human_size(size_val) if isinstance(size_val, int) else "?"
+        click.echo(
+            f"{row['name']!s:<{col_name}}  {size_str:>10}  {row['last_modified']}"
+        )

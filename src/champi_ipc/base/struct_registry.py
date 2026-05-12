@@ -21,7 +21,9 @@ class StructRegistry[S: SupportsInt]:
 
     def __init__(self) -> None:
         """Initialise an empty registry."""
-        self._registry: dict[int, tuple[int, Callable[..., bytes], Callable[[bytes], object]]] = {}
+        self._registry: dict[
+            int, tuple[int, Callable[..., bytes], Callable[[bytes], object]]
+        ] = {}
 
     def register(
         self,

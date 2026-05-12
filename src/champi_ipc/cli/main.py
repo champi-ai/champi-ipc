@@ -8,7 +8,7 @@ from champi_ipc.cli.status_cmd import status
 
 @click.group()
 @click.version_option(version="0.1.0", prog_name="champi-ipc")
-def cli():
+def cli() -> None:
     """champi-ipc CLI - Shared memory IPC utilities.
 
     Tools for managing and debugging shared memory regions used by champi-ipc.

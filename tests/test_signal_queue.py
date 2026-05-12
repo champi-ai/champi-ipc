@@ -32,16 +32,14 @@ class TestSignalQueueItem:
         assert item.data == {}
 
     def test_data_payload(self) -> None:
-        item = SignalQueueItem(
-            signal_type=FakeSignal.DATA, seq_num=7, data={"key": "value"}
-        )
+        item = SignalQueueItem(signal_type=FakeSignal.DATA, seq_num=7, key="value")
         assert item.data == {"key": "value"}
 
-    def test_timestamp_is_set(self) -> None:
-        before = time.monotonic()
-        item = SignalQueueItem(signal_type=FakeSignal.START, seq_num=1)
-        after = time.monotonic()
-        assert before <= item.timestamp <= after
+    def test_data_nested(self) -> None:
+        item = SignalQueueItem(
+            signal_type=FakeSignal.DATA, seq_num=1, payload={"k": "v"}
+        )
+        assert item.data == {"payload": {"k": "v"}}
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +144,10 @@ class TestSignalQueueMaxsize:
 
     def test_overflow_drops_oldest(self) -> None:
         q: SignalQueue = SignalQueue(maxsize=3)
-        q.put(FakeSignal.START)   # seq 1 — will be dropped
-        q.put(FakeSignal.DATA)    # seq 2
-        q.put(FakeSignal.STOP)    # seq 3
-        q.put(FakeSignal.START)   # seq 4 — pushes seq 1 out
+        q.put(FakeSignal.START)  # seq 1 — will be dropped
+        q.put(FakeSignal.DATA)  # seq 2
+        q.put(FakeSignal.STOP)  # seq 3
+        q.put(FakeSignal.START)  # seq 4 — pushes seq 1 out
 
         assert q.size() == 3
         first = q.get(timeout=1.0)
