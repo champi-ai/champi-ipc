@@ -43,7 +43,9 @@ def registry() -> StructRegistry[Sig]:
 
 
 @pytest.fixture()
-def manager(registry: StructRegistry[Sig]) -> Generator[SharedMemoryManager[Sig], None, None]:
+def manager(
+    registry: StructRegistry[Sig],
+) -> Generator[SharedMemoryManager[Sig], None, None]:
     mgr: SharedMemoryManager[Sig] = SharedMemoryManager(
         prefix="test_sp", registry=registry
     )
@@ -53,7 +55,9 @@ def manager(registry: StructRegistry[Sig]) -> Generator[SharedMemoryManager[Sig]
 
 
 @pytest.fixture()
-def processor(manager: SharedMemoryManager[Sig]) -> Generator[SignalProcessor[Sig], None, None]:
+def processor(
+    manager: SharedMemoryManager[Sig],
+) -> Generator[SignalProcessor[Sig], None, None]:
     proc: SignalProcessor[Sig] = SignalProcessor(manager)
     proc.start()
     yield proc
@@ -187,8 +191,7 @@ def test_signal_loss_warning_logged_when_ack_lags(
         logger.remove(sink_id)
 
     assert any(
-        "signal loss" in t.lower() or "may be skipped" in t
-        for t in warnings_captured
+        "signal loss" in t.lower() or "may be skipped" in t for t in warnings_captured
     ), f"Expected signal-loss warning, got: {warnings_captured}"
 
 

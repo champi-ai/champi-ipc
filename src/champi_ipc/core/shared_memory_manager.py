@@ -112,9 +112,9 @@ class SharedMemoryManager[S: SupportsInt]:
         if len(data) > size:
             msg = f"Data length {len(data)} exceeds region size {size}"
             raise ValueError(msg)
-        self._buf(region)[:len(data)] = data
+        self._buf(region)[: len(data)] = data
         if len(data) < size:
-            self._buf(region)[len(data):size] = bytes(size - len(data))
+            self._buf(region)[len(data) : size] = bytes(size - len(data))
         logger.debug(f"write_signal: {self._signal_name(key)} ({len(data)} bytes)")
 
     def read_signal(self, signal_type: S) -> bytes:

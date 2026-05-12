@@ -35,7 +35,11 @@ def cleanup(prefix: str, signal_module: str | None, dry_run: bool) -> None:
         try:
             importlib.import_module(signal_module)
         except ImportError as exc:
-            click.secho(f"Error: cannot import module {signal_module!r}: {exc}", fg="red", err=True)
+            click.secho(
+                f"Error: cannot import module {signal_module!r}: {exc}",
+                fg="red",
+                err=True,
+            )
             sys.exit(1)
 
     if dry_run:
@@ -58,7 +62,9 @@ def cleanup(prefix: str, signal_module: str | None, dry_run: bool) -> None:
         click.secho("No regions removed.", fg="green")
 
     if len(result.failed) > 0:
-        click.secho(f"Failed to remove {len(result.failed)} region(s):", fg="red", err=True)
+        click.secho(
+            f"Failed to remove {len(result.failed)} region(s):", fg="red", err=True
+        )
         for name in result.failed:
             click.secho(f"  {name}", fg="red", err=True)
         sys.exit(1)

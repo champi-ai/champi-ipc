@@ -265,6 +265,7 @@ class SignalProcessor[S: SupportsInt]:
 # Helpers
 # ------------------------------------------------------------------
 
+
 def _type_name(signal_type: SupportsInt) -> str:
     """Return a human-readable name for *signal_type*.
 

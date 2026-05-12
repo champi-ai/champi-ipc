@@ -35,7 +35,9 @@ def test_cleanup_removes_regions() -> None:
     """Live run calls cleanup_orphaned_regions and reports removals."""
     runner = CliRunner()
     mock_result = CleanupResult(removed=["test_alpha", "test_beta"], failed=[])
-    with patch("champi_ipc.cli.cleanup_cmd.cleanup_orphaned_regions", return_value=mock_result):
+    with patch(
+        "champi_ipc.cli.cleanup_cmd.cleanup_orphaned_regions", return_value=mock_result
+    ):
         result = runner.invoke(cli, ["cleanup", "--prefix", "test_"])
     assert result.exit_code == 0
     assert "Removed 2 region(s)" in result.output
@@ -47,7 +49,9 @@ def test_cleanup_exits_1_on_failures() -> None:
     """Live run exits with code 1 when any region fails to be removed."""
     runner = CliRunner()
     mock_result = CleanupResult(removed=["test_alpha"], failed=["test_broken"])
-    with patch("champi_ipc.cli.cleanup_cmd.cleanup_orphaned_regions", return_value=mock_result):
+    with patch(
+        "champi_ipc.cli.cleanup_cmd.cleanup_orphaned_regions", return_value=mock_result
+    ):
         result = runner.invoke(cli, ["cleanup", "--prefix", "test_"])
     assert result.exit_code == 1
     assert "Removed 1 region(s)" in result.output
@@ -59,7 +63,9 @@ def test_cleanup_no_regions_removed() -> None:
     """Live run with no matching regions prints appropriate message."""
     runner = CliRunner()
     mock_result = CleanupResult(removed=[], failed=[])
-    with patch("champi_ipc.cli.cleanup_cmd.cleanup_orphaned_regions", return_value=mock_result):
+    with patch(
+        "champi_ipc.cli.cleanup_cmd.cleanup_orphaned_regions", return_value=mock_result
+    ):
         result = runner.invoke(cli, ["cleanup", "--prefix", "test_"])
     assert result.exit_code == 0
     assert "No regions removed" in result.output

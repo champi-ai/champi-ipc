@@ -60,8 +60,12 @@ def unpack_counter(data: bytes) -> SignalData:
 
 def create_registry() -> StructRegistry[SampleSignals]:
     registry: StructRegistry[SampleSignals] = StructRegistry()
-    registry.register(SampleSignals.MESSAGE, MESSAGE_STRUCT.size, pack_message, unpack_message)
-    registry.register(SampleSignals.COUNTER, COUNTER_STRUCT.size, pack_counter, unpack_counter)
+    registry.register(
+        SampleSignals.MESSAGE, MESSAGE_STRUCT.size, pack_message, unpack_message
+    )
+    registry.register(
+        SampleSignals.COUNTER, COUNTER_STRUCT.size, pack_counter, unpack_counter
+    )
     return registry
 
 
@@ -71,6 +75,7 @@ _SIGNAL_TYPES = [SampleSignals.MESSAGE, SampleSignals.COUNTER]
 @pytest.fixture(autouse=True)
 def cleanup_regions():
     from champi_ipc.utils.cleanup import cleanup_orphaned_regions
+
     cleanup_orphaned_regions("champi_ipc_test")
     yield
     cleanup_orphaned_regions("champi_ipc_test")
@@ -85,7 +90,9 @@ def test_single_message_flow():
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("single_test")
-    processor.connect_signal(msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text})
+    processor.connect_signal(
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
+    )
 
     processor.start()
     msg_signal.send(text="Hello World")
@@ -97,7 +104,9 @@ def test_single_message_flow():
 
     reader = SignalReader(consumer_mgr)
     received: list[SignalData] = []
-    reader.register_handler(SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw)))
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw))
+    )
     reader.poll_once()
 
     producer_mgr.cleanup()
@@ -116,7 +125,9 @@ def test_multiple_messages_same_type():
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("multi_test")
-    processor.connect_signal(msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text})
+    processor.connect_signal(
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
+    )
     processor.start()
 
     messages = ["First", "Second", "Third", "Fourth", "Fifth"]
@@ -131,7 +142,9 @@ def test_multiple_messages_same_type():
 
     reader = SignalReader(consumer_mgr)
     received: list[SignalData] = []
-    reader.register_handler(SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw)))
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw))
+    )
 
     for _ in range(10):
         reader.poll_once()
@@ -154,8 +167,12 @@ def test_mixed_signal_types():
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("mixed_msg")
     counter_signal = signal("mixed_counter")
-    processor.connect_signal(msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text})
-    processor.connect_signal(counter_signal, SampleSignals.COUNTER, lambda value: {"value": value})
+    processor.connect_signal(
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
+    )
+    processor.connect_signal(
+        counter_signal, SampleSignals.COUNTER, lambda value: {"value": value}
+    )
     processor.start()
 
     msg_signal.send(text="Message 1")
@@ -171,8 +188,12 @@ def test_mixed_signal_types():
     reader = SignalReader(consumer_mgr)
     received_msgs: list[SignalData] = []
     received_counters: list[SignalData] = []
-    reader.register_handler(SampleSignals.MESSAGE, lambda raw: received_msgs.append(unpack_message(raw)))
-    reader.register_handler(SampleSignals.COUNTER, lambda raw: received_counters.append(unpack_counter(raw)))
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received_msgs.append(unpack_message(raw))
+    )
+    reader.register_handler(
+        SampleSignals.COUNTER, lambda raw: received_counters.append(unpack_counter(raw))
+    )
 
     for _ in range(10):
         reader.poll_once()
@@ -196,7 +217,9 @@ def test_sequence_numbers_increment():
 
     processor = SignalProcessor(producer_mgr)
     msg_signal = signal("seq_test")
-    processor.connect_signal(msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text})
+    processor.connect_signal(
+        msg_signal, SampleSignals.MESSAGE, lambda text: {"text": text}
+    )
     processor.start()
 
     for i in range(3):
@@ -210,7 +233,9 @@ def test_sequence_numbers_increment():
 
     reader = SignalReader(consumer_mgr)
     received: list[SignalData] = []
-    reader.register_handler(SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw)))
+    reader.register_handler(
+        SampleSignals.MESSAGE, lambda raw: received.append(unpack_message(raw))
+    )
 
     for _ in range(5):
         reader.poll_once()

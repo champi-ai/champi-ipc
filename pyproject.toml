@@ -95,3 +95,8 @@ ignore = [
 line-length = 88
 target-version = ['py312']
 
+[dependency-groups]
+dev = [
+    "black>=26.3.1",
+]
+

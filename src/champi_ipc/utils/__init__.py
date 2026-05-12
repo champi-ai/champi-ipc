@@ -20,5 +20,5 @@ __all__ = [
     "RegionNotFoundError",
     "cleanup_orphaned_regions",
     "get_region_info",
-    "list_regions"
+    "list_regions",
 ]

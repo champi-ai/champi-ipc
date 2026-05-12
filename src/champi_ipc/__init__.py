@@ -75,5 +75,5 @@ __all__ = [
     "CleanupResult",
     "cleanup_orphaned_regions",
     "get_region_info",
-    "list_regions"
+    "list_regions",
 ]

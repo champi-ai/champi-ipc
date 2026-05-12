@@ -49,7 +49,9 @@ class TestStructRegistryRegister:
         reg: StructRegistry[FakeSignal] = StructRegistry()
         reg.register(FakeSignal.POINT, _POINT_STRUCT.size, _pack_point, _unpack_point)
         with pytest.raises(ValueError, match="already registered"):
-            reg.register(FakeSignal.POINT, _POINT_STRUCT.size, _pack_point, _unpack_point)
+            reg.register(
+                FakeSignal.POINT, _POINT_STRUCT.size, _pack_point, _unpack_point
+            )
 
     def test_multiple_signal_types(self) -> None:
         reg: StructRegistry[FakeSignal] = StructRegistry()

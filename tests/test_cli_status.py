@@ -65,7 +65,10 @@ class TestStatusCommand:
                 "champi_ipc.cli.status_cmd.get_region_info",
                 return_value=_make_info("test_region_a", 4096),
             ),
-            patch("champi_ipc.cli.status_cmd._last_modified", return_value="2026-01-01 00:00:00"),
+            patch(
+                "champi_ipc.cli.status_cmd._last_modified",
+                return_value="2026-01-01 00:00:00",
+            ),
         ):
             result = runner.invoke(cli, ["status", "--prefix", "test_", "--json"])
         assert result.exit_code == 0
