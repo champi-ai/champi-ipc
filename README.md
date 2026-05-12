@@ -1,5 +1,8 @@
 # champi-ipc
 
+[![CI](https://github.com/champi-ai/champi-ipc/actions/workflows/ci.yml/badge.svg)](https://github.com/champi-ai/champi-ipc/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/champi-ipc)](https://pypi.org/project/champi-ipc/)
+
 Generic shared memory IPC infrastructure for multi-process Python applications.
 
 ## Overview
