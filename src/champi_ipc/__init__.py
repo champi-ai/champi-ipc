@@ -12,6 +12,7 @@ from champi_ipc.base.exceptions import (
 )
 from champi_ipc.base.protocols import SignalTypeProtocol
 from champi_ipc.base.struct_registry import StructRegistry
+from champi_ipc.core.shared_memory_manager import SharedMemoryManager
 from champi_ipc.utils.ack import get_ack_size, pack_ack, unpack_ack
 
 __version__ = "0.1.0"
@@ -21,6 +22,7 @@ __all__ = [
     # Base
     "SignalTypeProtocol",
     "StructRegistry",
+    "SharedMemoryManager",
     # Exceptions
     "IPCError",
     "RegionExistsError",
