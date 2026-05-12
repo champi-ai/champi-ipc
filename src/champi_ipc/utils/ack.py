@@ -1,53 +1,39 @@
-"""ACK (acknowledgment) utilities for signal loss detection.
+"""ACK frame helpers for shared memory signal-loss detection."""
 
-ACK regions store the sequence number of the last successfully processed signal,
-allowing the processor to detect when signals are dropped/skipped.
-"""
+import struct as _struct
 
-import struct
-
-# ACK struct: seq_num(Q) - just the sequence number (8 bytes unsigned long long)
-ACK_STRUCT = struct.Struct("=Q")
+# Native byte order, unsigned 64-bit integer: seq_num
+ACK_STRUCT = _struct.Struct("=Q")
 
 
-def pack_ack(seq_num: int) -> bytes:
-    """Pack ACK with sequence number.
+def pack_ack(seq: int) -> bytes:
+    """Pack a sequence number into an ACK frame.
 
     Args:
-        seq_num: Sequence number to acknowledge
+        seq: Sequence number to acknowledge.  Valid range: 0 to 2**64-1.
 
     Returns:
-        Packed ACK data (8 bytes)
-
-    Example:
-        >>> data = pack_ack(42)
-        >>> len(data)
-        8
+        Eight bytes encoding *seq* in native byte order.
     """
-    return ACK_STRUCT.pack(seq_num)
+    return ACK_STRUCT.pack(seq)
 
 
 def unpack_ack(data: bytes) -> int:
-    """Unpack ACK to get sequence number.
+    """Unpack an ACK frame to recover the sequence number.
 
     Args:
-        data: Packed ACK data (must be 8 bytes)
+        data: Exactly ``get_ack_size()`` bytes as produced by :func:`pack_ack`.
 
     Returns:
-        Sequence number
-
-    Example:
-        >>> data = pack_ack(42)
-        >>> unpack_ack(data)
-        42
+        The sequence number encoded in *data*.
     """
-    return ACK_STRUCT.unpack(data)[0]
+    return int(ACK_STRUCT.unpack(data)[0])
 
 
 def get_ack_size() -> int:
-    """Get the size of ACK struct in bytes.
+    """Return the fixed byte length of an ACK frame.
 
     Returns:
-        Size in bytes (always 8)
+        Number of bytes in a packed ACK struct (always 8).
     """
     return ACK_STRUCT.size
