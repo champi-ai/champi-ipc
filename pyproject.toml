@@ -1,0 +1,80 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "champi-ipc"
+version = "0.1.0"
+description = "Shared memory IPC infrastructure for multi-process Python applications"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Divagnz", email = "oscar.liguori.bagnis@gmail.com"}
+]
+requires-python = ">=3.12"
+keywords = ["ipc", "shared-memory", "signals", "multiprocessing", "blinker"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Distributed Computing",
+]
+
+dependencies = [
+    "loguru>=0.7.0",
+    "blinker>=1.7.0",
+    "click>=8.1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "mypy>=1.8.0",
+    "ruff>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/champi-ai/champi-ipc"
+Repository = "https://github.com/champi-ai/champi-ipc"
+Issues = "https://github.com/champi-ai/champi-ipc/issues"
+
+[project.scripts]
+champi-ipc = "champi_ipc.cli.main:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/champi_ipc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "B",
+    "C4",
+    "UP",
+]
+ignore = [
+    "E501",
+]
