@@ -95,12 +95,3 @@ ignore = [
 line-length = 88
 target-version = ['py312']
 
-[dependency-groups]
-dev = [
-    "pre-commit>=4.6.0",
-]
-
-[dependency-groups]
-dev = [
-    "pytest-cov>=7.1.0",
-]

@@ -50,15 +50,15 @@ def cleanup(prefix: str, signal_module: str | None, dry_run: bool) -> None:
 
     result = cleanup_orphaned_regions(prefix)
 
-    if result.total_removed > 0:
-        click.secho(f"Removed {result.total_removed} region(s):", fg="green")
+    if len(result.removed) > 0:
+        click.secho(f"Removed {len(result.removed)} region(s):", fg="green")
         for name in result.removed:
             click.secho(f"  {name}", fg="green")
     else:
         click.secho("No regions removed.", fg="green")
 
-    if result.total_failed > 0:
-        click.secho(f"Failed to remove {result.total_failed} region(s):", fg="red", err=True)
+    if len(result.failed) > 0:
+        click.secho(f"Failed to remove {len(result.failed)} region(s):", fg="red", err=True)
         for name in result.failed:
             click.secho(f"  {name}", fg="red", err=True)
         sys.exit(1)

@@ -4,9 +4,11 @@ This module connects blinker signals to the shared memory IPC infrastructure,
 queuing signals and processing them in a background thread.
 """
 
+from __future__ import annotations
+
 import threading
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any, SupportsInt
 
 from blinker import Signal
 from loguru import logger

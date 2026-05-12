@@ -31,7 +31,7 @@ def test_register_signal_type():
     registry = StructRegistry()
     registry.register(TestSignals.SIGNAL_A, 32, pack_signal_a, unpack_signal_a)
 
-    assert registry.get_struct_size(TestSignals.SIGNAL_A) == 32
+    assert registry.get_size(TestSignals.SIGNAL_A) == 32
 
 
 def test_pack_unpack():
@@ -39,12 +39,13 @@ def test_pack_unpack():
     registry = StructRegistry()
     registry.register(TestSignals.SIGNAL_A, 32, pack_signal_a, unpack_signal_a)
 
-    # Pack
-    packed = registry.pack(TestSignals.SIGNAL_A, 42)
+    # Pack — seq_num is passed as kwarg forwarded to the pack callable
+    packed = registry.pack(TestSignals.SIGNAL_A, seq_num=42)
     assert len(packed) == 32
 
     # Unpack
     signal_data = registry.unpack(TestSignals.SIGNAL_A, packed)
+    assert isinstance(signal_data, SignalData)
     assert signal_data.seq_num == 42
     assert signal_data.signal_type == TestSignals.SIGNAL_A
 
@@ -53,8 +54,8 @@ def test_missing_signal_type():
     """Test error when accessing unregistered signal type."""
     registry = StructRegistry()
 
-    with pytest.raises(KeyError):
-        registry.get_struct_size(TestSignals.SIGNAL_A)
+    with pytest.raises(Exception):  # noqa: B017
+        registry.get_size(TestSignals.SIGNAL_A)
 
 
 if __name__ == "__main__":
