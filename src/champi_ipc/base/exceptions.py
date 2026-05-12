@@ -6,7 +6,15 @@ class IPCError(Exception):
 
 
 class RegionNotFoundError(IPCError):
-    """Raised when a shared memory region does not exist."""
+    """Raised when a shared memory region does not exist.
+
+    Args:
+        name: The region name that was not found.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        super().__init__(f"Shared memory region not found: {name!r}")
 
 
 class RegionExistsError(IPCError):
