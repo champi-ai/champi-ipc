@@ -1,142 +1,152 @@
 """Basic usage example of champi-ipc.
 
-This example demonstrates a simple producer-consumer pattern using
-champi-ipc for inter-process communication.
+Demonstrates a producer-consumer pattern using champi-ipc for
+inter-process communication over named POSIX shared memory.
+
+Run with:
+    python examples/basic_usage.py
 """
 
-from enum import IntEnum
 import struct
 import time
+from enum import IntEnum
 from multiprocessing import Process
+from typing import cast
 
 from blinker import signal
+
 from champi_ipc import (
     SharedMemoryManager,
     SignalProcessor,
     SignalReader,
     StructRegistry,
-    SignalData,
 )
 
-# Define signal types
+# ---------------------------------------------------------------------------
+# 1. Define a signal enum
+# ---------------------------------------------------------------------------
+
+
 class MySignals(IntEnum):
+    """Signal types used in this example."""
+
     MESSAGE = 1
 
 
-# Define struct (seq_num, signal_type, text)
-MESSAGE_STRUCT = struct.Struct("=QB256s")
+# ---------------------------------------------------------------------------
+# 2. Register the signal in a StructRegistry
+# ---------------------------------------------------------------------------
+
+MESSAGE_STRUCT = struct.Struct("=256s")
 
 
-def pack_message(seq_num: int, text: str) -> bytes:
-    """Pack message signal into binary format."""
-    text_bytes = text.encode()[:256].ljust(256, b"\x00")
-    return MESSAGE_STRUCT.pack(seq_num, MySignals.MESSAGE, text_bytes)
+def _pack_message(text: str) -> bytes:
+    """Pack a text string into 256-byte fixed-width bytes."""
+    return MESSAGE_STRUCT.pack(text.encode()[:256].ljust(256, b"\x00"))
 
 
-def unpack_message(data: bytes) -> SignalData:
-    """Unpack message signal from binary format."""
-    seq_num, signal_type, text_bytes = MESSAGE_STRUCT.unpack(data)
-    return SignalData(
-        signal_type=MySignals(signal_type),
-        seq_num=seq_num,
-        data={"text": text_bytes.rstrip(b"\x00").decode()},
-    )
+def _unpack_message(data: bytes) -> str:
+    """Unpack 256-byte fixed-width bytes to a text string."""
+    (raw,) = MESSAGE_STRUCT.unpack(data)
+    return cast(bytes, raw).rstrip(b"\x00").decode()
 
 
-# Create registry
-registry = StructRegistry()
-registry.register(MySignals.MESSAGE, MESSAGE_STRUCT.size, pack_message, unpack_message)
+registry: StructRegistry[MySignals] = StructRegistry()
+registry.register(
+    MySignals.MESSAGE,
+    MESSAGE_STRUCT.size,
+    _pack_message,
+    _unpack_message,
+)
 
 
-def producer_process():
-    """Producer process that emits signals."""
+# ---------------------------------------------------------------------------
+# 3. Producer: create regions, start SignalProcessor, fire signals
+# ---------------------------------------------------------------------------
+
+
+def producer_process() -> None:
+    """Producer: writes signals to shared memory."""
     print("[Producer] Starting...")
 
-    # Create memory manager
-    manager = SharedMemoryManager("example_app", MySignals, registry)
-    manager.create_regions()
+    manager: SharedMemoryManager[MySignals] = SharedMemoryManager(
+        "example_app", registry
+    )
+    manager.create_regions([MySignals.MESSAGE])
 
-    # Create processor
-    processor = SignalProcessor(manager)
+    processor: SignalProcessor[MySignals] = SignalProcessor(manager)
 
-    # Connect signal
     msg_signal = signal("message")
     processor.connect_signal(
-        msg_signal, MySignals.MESSAGE, lambda text: {"text": text}
+        msg_signal,
+        MySignals.MESSAGE,
+        lambda text: {"text": text},
     )
 
     processor.start()
 
-    # Emit messages
     for i in range(5):
         msg = f"Message #{i}"
         print(f"[Producer] Sending: {msg}")
-        msg_signal.send(text=msg)
-        time.sleep(0.5)
+        msg_signal.send(None, text=msg)
+        time.sleep(0.4)
 
-    # Give time for last message to be processed
-    time.sleep(1)
+    time.sleep(0.5)
 
-    # Cleanup
     processor.stop()
     manager.cleanup()
     print("[Producer] Done!")
 
 
-def consumer_process():
-    """Consumer process that reads signals."""
+# ---------------------------------------------------------------------------
+# 4. Consumer: attach regions, start SignalReader, receive signals
+# ---------------------------------------------------------------------------
+
+
+def consumer_process() -> None:
+    """Consumer: reads signals from shared memory."""
     print("[Consumer] Starting...")
-    time.sleep(0.5)  # Wait for producer to create regions
+    time.sleep(0.3)
 
-    # Attach to regions
-    manager = SharedMemoryManager("example_app", MySignals, registry)
-    manager.attach_regions()
+    manager: SharedMemoryManager[MySignals] = SharedMemoryManager(
+        "example_app", registry
+    )
+    manager.attach_regions([MySignals.MESSAGE])
 
-    # Create reader
-    reader = SignalReader(manager)
+    reader: SignalReader[MySignals] = SignalReader(manager, poll_rate_hz=60.0)
 
-    # Register handler
-    def handle_message(signal_data: SignalData):
-        print(f"[Consumer] Received: {signal_data.data['text']}")
+    received: list[str] = []
+
+    def handle_message(raw: bytes) -> None:
+        text = _unpack_message(raw)
+        print(f"[Consumer] Received: {text}")
+        received.append(text)
 
     reader.register_handler(MySignals.MESSAGE, handle_message)
+    reader.start()
 
-    # Poll for 6 seconds
-    import threading
+    time.sleep(5)
 
-    stop_event = threading.Event()
-
-    def poll():
-        while not stop_event.is_set():
-            reader.poll_once()
-            time.sleep(1.0 / 60)  # 60 Hz
-
-    poll_thread = threading.Thread(target=poll)
-    poll_thread.start()
-
-    time.sleep(6)
-    stop_event.set()
-    poll_thread.join()
-
-    # Cleanup
+    reader.stop()
     manager.cleanup()
-    print("[Consumer] Done!")
+    print(f"[Consumer] Done! Received {len(received)} message(s).")
 
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     print("=" * 50)
     print("champi-ipc Basic Usage Example")
     print("=" * 50)
 
-    # Start producer
     producer = Process(target=producer_process)
-    producer.start()
-
-    # Start consumer
     consumer = Process(target=consumer_process)
+
+    producer.start()
     consumer.start()
 
-    # Wait for both
     producer.join()
     consumer.join()
 
