@@ -27,6 +27,22 @@ Example:
     >>> manager.create_regions()
 """
 
+from champi_ipc.base.exceptions import (
+    IPCError,
+    RegionExistsError,
+    RegionNotFoundError,
+    SignalTypeNotRegisteredError,
+)
+from champi_ipc.base.protocols import SignalTypeProtocol
+from champi_ipc.base.struct_registry import StructRegistry
+from champi_ipc.utils.ack import get_ack_size, pack_ack, unpack_ack
+from champi_ipc.utils.cleanup import (
+    CleanupResult,
+    cleanup_orphaned_regions,
+    get_region_info,
+    list_regions,
+)
+
 __version__ = "0.1.0"
 
 # Core classes
@@ -53,6 +69,7 @@ from champi_ipc.utils.cleanup import (
 )
 
 __all__ = [
+   "__version__"
     # Core
     "SharedMemoryManager",
     "SignalProcessor",
@@ -74,5 +91,5 @@ __all__ = [
     "get_region_info",
     "pack_ack",
     "unpack_ack",
-    "get_ack_size",
+    "get_ack_size"
 ]
