@@ -1,4 +1,4 @@
-"""Utility helpers for champi-ipc."""
+"""Utility modules for champi-ipc."""
 
 from champi_ipc.utils.ack import get_ack_size, pack_ack, unpack_ack
 from champi_ipc.utils.cleanup import (
@@ -17,5 +17,5 @@ __all__ = [
     "get_region_info",
     "list_regions",
     "pack_ack",
-    "unpack_ack",
+    "unpack_ack"
 ]

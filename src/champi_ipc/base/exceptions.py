@@ -2,7 +2,9 @@
 
 
 class IPCError(Exception):
-    """Base exception for all champi-ipc errors."""
+    """Base exception for IPC errors."""
+
+    pass
 
 
 class RegionNotFoundError(IPCError):
@@ -18,8 +20,12 @@ class RegionNotFoundError(IPCError):
 
 
 class RegionExistsError(IPCError):
-    """Raised when a shared memory region already exists."""
+    """Shared memory region already exists."""
+
+    pass
 
 
 class SignalTypeNotRegisteredError(IPCError):
-    """Raised when a signal type has no entry in the StructRegistry."""
+    """Signal type not registered in struct registry."""
+
+    pass
