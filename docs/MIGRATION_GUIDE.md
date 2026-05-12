@@ -1,340 +1,332 @@
-# Migration Guide: champi-ipc
+# Migration Guide
 
-This guide helps you migrate from the embedded IPC code in `champi` and `champi-stt` to the standalone `champi-ipc` library.
+This guide walks through replacing the embedded IPC code in `champi-imgui` and
+`champi-stt` with `champi-ipc`.
 
-## Overview
+---
 
-The `champi-ipc` library extracts and generalizes the IPC (Inter-Process Communication) infrastructure that was duplicated across multiple services. The new library provides:
+## Overview of changes
 
-- **Generic design**: Works with any `IntEnum` signal types
-- **Type safety**: Uses Python protocols and type hints
-- **Flexibility**: Registry pattern for dynamic signal registration
-- **CLI tools**: For debugging and managing shared memory regions
+| Area | Before | After |
+|------|--------|-------|
+| Import paths | `mcp_champi.ipc_svc.*` / `champi_stt.assistant.ipc.*` | `champi_ipc` |
+| Manager constructor | `SharedMemoryManager(name, signal_enum, struct_sizes_dict)` | `SharedMemoryManager(prefix, registry)` |
+| Region lifecycle | `create_regions()` / `attach_regions()` (no args) | `create_regions(signal_types)` / `attach_regions(signal_types)` |
+| Pack / unpack | Standalone functions or manager methods | Registered on `StructRegistry`, called via `registry.pack()` / `registry.unpack()` |
+| Struct size map | Plain `dict[SignalType, int]` | `StructRegistry` |
 
-## Installation
+---
+
+## Step 1 — Add the dependency
+
+In `pyproject.toml` add `champi-ipc` as a dependency:
+
+```toml
+[project]
+dependencies = [
+    "champi-ipc>=0.1.0",
+]
+```
+
+With uv:
 
 ```bash
-pip install champi-ipc
+uv add "champi-ipc>=0.1.0"
 ```
 
-Or with uv:
-```bash
-uv add champi-ipc
-```
+---
 
-## Key Changes
+## Step 2 — Define your signal enum
 
-### 1. Signal Queue
-
-**Before** (champi):
-```python
-from mcp_champi.ipc_svc.signal_queue import SignalQueue
-
-queue = SignalQueue()
-```
-
-**After** (champi-ipc):
-```python
-from champi_ipc import SignalQueue
-
-queue = SignalQueue()
-```
-
-**Changes**:
-- Import path changed
-- No changes to API - fully compatible!
-
-### 2. Shared Memory Manager
-
-**Before** (champi):
-```python
-from mcp_champi.ipc_svc.shared_memory import SharedMemoryManager
-from mcp_champi.ipc_svc.champi_structs import ChampiSignals, STRUCT_SIZES
-
-manager = SharedMemoryManager("champi", ChampiSignals, STRUCT_SIZES)
-```
-
-**After** (champi-ipc):
-```python
-from champi_ipc import SharedMemoryManager, StructRegistry
-from my_app.signals import MySignals
-
-# Create registry
-registry = StructRegistry()
-registry.register(MySignals.SIGNAL_A, 32, pack_signal_a, unpack_signal_a)
-registry.register(MySignals.SIGNAL_B, 64, pack_signal_b, unpack_signal_b)
-
-# Create manager
-manager = SharedMemoryManager("my_app", MySignals, registry)
-```
-
-**Changes**:
-- **Generic design**: No longer hardcoded to ChampiSignals
-- **StructRegistry**: New registry pattern for pack/unpack functions
-- **Constructor**: Takes `(name_prefix, signal_enum, registry)` instead of `(name, signal_enum, struct_sizes)`
-
-### 3. Signal Processor
-
-**Before** (champi-stt):
-```python
-from champi_stt.assistant.ipc.signal_processor import SignalProcessor
-
-processor = SignalProcessor(manager)
-processor.connect_signal(my_signal, SignalTypes.TEXT, data_mapper)
-```
-
-**After** (champi-ipc):
-```python
-from champi_ipc import SignalProcessor
-
-processor = SignalProcessor(manager)
-processor.connect_signal(my_signal, MySignals.TEXT, data_mapper)
-```
-
-**Changes**:
-- Import path changed
-- API is compatible!
-
-### 4. Signal Reader
-
-**Before** (champi-stt):
-```python
-from champi_stt.assistant.ipc.signal_reader import SignalReader
-
-reader = SignalReader(manager)
-reader.register_handler(SignalTypes.TEXT, handle_text)
-```
-
-**After** (champi-ipc):
-```python
-from champi_ipc import SignalReader
-
-reader = SignalReader(manager)
-reader.register_handler(MySignals.TEXT, handle_text)
-```
-
-**Changes**:
-- Import path changed
-- API is compatible!
-
-## Migration Steps
-
-### Step 1: Define Your Signal Enum
+Keep (or create) a dedicated `signals.py` module in your project. Signal types
+must be `IntEnum` subclasses:
 
 ```python
-# signals.py
+# my_app/signals.py
 from enum import IntEnum
 
 class MySignals(IntEnum):
-    MESSAGE = 1
+    TEXT    = 1
     COUNTER = 2
-    STATUS = 3
+    STATUS  = 3
 ```
 
-### Step 2: Create Pack/Unpack Functions
+If you already have this as part of the old embedded IPC code, you can keep it
+in place and just change the import in the rest of your code.
+
+---
+
+## Step 3 — Create pack / unpack functions
+
+Each signal type needs two functions:
+
+- `pack_<name>(**kwargs) -> bytes` — serialise kwargs into a fixed-size byte
+  string.
+- `unpack_<name>(data: bytes) -> SignalData` — deserialise bytes back into a
+  `SignalData` instance.
 
 ```python
-# signal_codec.py
+# my_app/signal_codec.py
 import struct
 from champi_ipc import SignalData
+from .signals import MySignals
 
-# Define structs
-MESSAGE_STRUCT = struct.Struct("=QB256s")  # seq_num, signal_type, text
+TEXT_STRUCT = struct.Struct("=QB256s")   # seq_num (Q), signal_type (B), text (256s)
 
-def pack_message(seq_num: int, **kwargs) -> bytes:
-    text = kwargs.get("text", "")
+def pack_text(**kwargs: object) -> bytes:
+    text = str(kwargs.get("text", ""))
+    seq_num = int(kwargs["seq_num"])
     text_bytes = text.encode()[:256].ljust(256, b"\x00")
-    return MESSAGE_STRUCT.pack(seq_num, MySignals.MESSAGE, text_bytes)
+    return TEXT_STRUCT.pack(seq_num, MySignals.TEXT, text_bytes)
 
-def unpack_message(data: bytes) -> SignalData:
-    seq_num, signal_type, text_bytes = MESSAGE_STRUCT.unpack(data)
+def unpack_text(data: bytes) -> SignalData:
+    seq_num, sig_type, text_bytes = TEXT_STRUCT.unpack(data)
     return SignalData(
-        signal_type=MySignals(signal_type),
+        signal_type=MySignals(sig_type),
         seq_num=seq_num,
         data={"text": text_bytes.rstrip(b"\x00").decode()},
     )
 ```
 
-### Step 3: Create Registry
+Key rules:
+
+- Use a **fixed-size** `struct.Struct` — variable-length formats are not
+  supported.
+- The pack function receives keyword arguments forwarded from
+  `SignalQueue.put()` / `SignalProcessor.connect_signal()`.
+- The unpack function must accept exactly the bytes produced by pack.
+
+---
+
+## Step 4 — Set up StructRegistry
+
+Create a factory that builds and returns a configured `StructRegistry`:
 
 ```python
-# ipc_setup.py
+# my_app/ipc_setup.py
 from champi_ipc import StructRegistry
 from .signals import MySignals
-from .signal_codec import pack_message, unpack_message, MESSAGE_STRUCT
+from .signal_codec import pack_text, unpack_text, TEXT_STRUCT
 
-def create_registry():
-    registry = StructRegistry()
+def create_registry() -> StructRegistry:
+    registry: StructRegistry = StructRegistry()
     registry.register(
-        MySignals.MESSAGE,
-        MESSAGE_STRUCT.size,
-        pack_message,
-        unpack_message
+        MySignals.TEXT,
+        TEXT_STRUCT.size,
+        pack_text,
+        unpack_text,
     )
-    # Register other signal types...
+    # Register remaining signal types here
     return registry
 ```
 
-### Step 4: Update Producer Code
+Both the producer and consumer processes must build the same registry before
+opening the shared memory manager.
+
+---
+
+## Step 5 — Update SharedMemoryManager construction
+
+**Before (`champi-imgui` / old embedded code):**
 
 ```python
-# producer.py
-from blinker import signal
-from champi_ipc import SharedMemoryManager, SignalProcessor
-from .ipc_setup import create_registry
-from .signals import MySignals
-
-# Setup
-registry = create_registry()
-manager = SharedMemoryManager("my_app", MySignals, registry)
-manager.create_regions()
-
-processor = SignalProcessor(manager)
-
-# Connect signals
-msg_signal = signal("message")
-processor.connect_signal(
-    msg_signal,
-    MySignals.MESSAGE,
-    lambda text: {"text": text}
-)
-
-processor.start()
-
-# Emit signals
-msg_signal.send(text="Hello World")
-
-# Cleanup
-processor.stop()
-manager.cleanup()
-```
-
-### Step 5: Update Consumer Code
-
-```python
-# consumer.py
-from champi_ipc import SharedMemoryManager, SignalReader
-from .ipc_setup import create_registry
-from .signals import MySignals
-
-# Setup
-registry = create_registry()
-manager = SharedMemoryManager("my_app", MySignals, registry)
-manager.attach_regions()
-
-reader = SignalReader(manager)
-
-# Register handlers
-def handle_message(signal_data):
-    print(f"Received: {signal_data.data['text']}")
-
-reader.register_handler(MySignals.MESSAGE, handle_message)
-
-# Poll loop
-while True:
-    reader.poll_once()
-    time.sleep(1.0 / 60)  # 60 Hz
-
-# Cleanup
-manager.cleanup()
-```
-
-## CLI Tools
-
-The library includes CLI tools for debugging:
-
-### Check Status
-
-```bash
-champi-ipc status --prefix my_app
-champi-ipc status --prefix my_app --json
-```
-
-### Cleanup Orphaned Regions
-
-```bash
-# Dry run
-champi-ipc cleanup --prefix my_app --signal-module my_app.signals.MySignals --dry-run
-
-# Actually clean
-champi-ipc cleanup --prefix my_app --signal-module my_app.signals.MySignals
-```
-
-## Breaking Changes
-
-### StructRegistry Pattern
-
-The biggest change is the introduction of `StructRegistry` to replace hardcoded struct dictionaries:
-
-**Before**:
-```python
-STRUCT_SIZES = {
-    ChampiSignals.TEXT: 264,
-    ChampiSignals.AUDIO: 1024,
-}
+from mcp_champi.ipc_svc.shared_memory import SharedMemoryManager
+from mcp_champi.ipc_svc.champi_structs import ChampiSignals, STRUCT_SIZES
 
 manager = SharedMemoryManager("champi", ChampiSignals, STRUCT_SIZES)
+manager.create_regions()   # no arguments
 ```
 
-**After**:
+**After (`champi-ipc`):**
+
 ```python
+from champi_ipc import SharedMemoryManager
+from .ipc_setup import create_registry
+from .signals import MySignals
+
+registry = create_registry()
+manager = SharedMemoryManager("my_app", registry=registry)
+manager.create_regions([MySignals.TEXT, MySignals.COUNTER])   # explicit list
+```
+
+The `signal_type_enum` argument is gone. You pass the list of signal types
+directly to `create_regions()` and `attach_regions()` instead.
+
+---
+
+## Step 6 — Update producer code
+
+**Before (`champi-stt` / old embedded code):**
+
+```python
+from champi_stt.assistant.ipc.signal_processor import SignalProcessor
+
+processor = SignalProcessor(manager)
+processor.connect_signal(my_blinker_signal, SignalTypes.TEXT, data_mapper)
+processor.start()
+```
+
+**After:**
+
+```python
+from champi_ipc import SignalProcessor
+
+processor = SignalProcessor(manager)
+processor.connect_signal(my_blinker_signal, MySignals.TEXT, data_mapper=data_mapper)
+processor.start()
+```
+
+`SignalProcessor` is also a context manager:
+
+```python
+with SignalProcessor(manager) as processor:
+    processor.connect_signal(sig, MySignals.TEXT, data_mapper=lambda text: {"text": text})
+    sig.send(None, text="hello")
+```
+
+---
+
+## Step 7 — Update consumer code
+
+**Before (`champi-stt` / old embedded code):**
+
+```python
+from champi_stt.assistant.ipc.signal_reader import SignalReader
+
+reader = SignalReader(manager)
+reader.register_handler(SignalTypes.TEXT, handle_text)
+# manual loop:
+while True:
+    reader.poll_once()
+    time.sleep(1 / 60)
+```
+
+**After:**
+
+```python
+from champi_ipc import SignalReader
+
+reader = SignalReader(manager, poll_rate_hz=60.0)
+reader.register_handler(MySignals.TEXT, handle_text)
+reader.start()   # background thread polls at 60 Hz
+# ...
+reader.stop()
+```
+
+Or via context manager:
+
+```python
+with SignalReader(manager, poll_rate_hz=60.0) as reader:
+    reader.register_handler(MySignals.TEXT, handle_text)
+    time.sleep(5.0)
+```
+
+Handler signature: the handler now receives **raw bytes**, not a `SignalData`
+object. Call `registry.unpack()` inside the handler:
+
+```python
+def handle_text(raw: bytes) -> None:
+    sd = registry.unpack(MySignals.TEXT, raw)
+    print(sd.data["text"])
+```
+
+---
+
+## Step 8 — Remove old IPC modules
+
+Once all callers are updated, remove (or stop importing) the old embedded IPC
+modules:
+
+- `mcp_champi/ipc_svc/`
+- `champi_stt/assistant/ipc/`
+
+---
+
+## Breaking changes summary
+
+### Constructor signature changed
+
+```python
+# Old
+SharedMemoryManager("champi", ChampiSignals, STRUCT_SIZES)
+
+# New
+SharedMemoryManager("my_app", registry=registry)
+```
+
+### create_regions / attach_regions require a signal list
+
+```python
+# Old
+manager.create_regions()
+
+# New
+manager.create_regions([MySignals.TEXT, MySignals.COUNTER])
+```
+
+### StructRegistry replaces plain struct-size dicts
+
+```python
+# Old
+STRUCT_SIZES = {ChampiSignals.TEXT: 264}
+manager = SharedMemoryManager("champi", ChampiSignals, STRUCT_SIZES)
+
+# New
 registry = StructRegistry()
 registry.register(MySignals.TEXT, 264, pack_text, unpack_text)
-registry.register(MySignals.AUDIO, 1024, pack_audio, unpack_audio)
-
-manager = SharedMemoryManager("my_app", MySignals, registry)
+manager = SharedMemoryManager("my_app", registry=registry)
 ```
 
-### Pack/Unpack in Registry
+### registry.pack() signature changed
 
-Pack and unpack functions are now part of the registry instead of being methods on the manager:
-
-**Before**:
 ```python
-# Pack/unpack were separate utility functions
-from champi_stt.assistant.ipc.structs import pack_text, unpack_text
+# Old (protocols.py StructRegistry)
+registry.pack(signal_type, seq_num=1, text="hello")
 
-packed = pack_text(seq_num, text="hello")
-signal_data = unpack_text(packed)
+# New (base/struct_registry.py StructRegistry — the exported one)
+registry.pack(signal_type, text="hello")
+# seq_num is supplied by the caller inside pack_fn itself, not by the registry
 ```
 
-**After**:
+### SignalReader handlers receive bytes, not SignalData
+
 ```python
-# Pack/unpack are called through the registry
-packed = registry.pack(MySignals.TEXT, seq_num, text="hello")
-signal_data = registry.unpack(MySignals.TEXT, packed)
+# Old
+def handle_text(signal_data: SignalData) -> None:
+    print(signal_data.data["text"])
+
+# New
+def handle_text(raw: bytes) -> None:
+    sd = registry.unpack(MySignals.TEXT, raw)
+    print(sd.data["text"])
 ```
 
-## Troubleshooting
+### poll_loop() no longer takes a poll_rate_hz argument
 
-### Import Errors
+The poll rate is set on the constructor: `SignalReader(manager, poll_rate_hz=60.0)`.
 
-If you see import errors, make sure you've installed champi-ipc:
+---
+
+## CLI tools after migration
+
+Use the CLI to verify that regions are being created and to clean up orphaned
+regions during development:
+
 ```bash
-pip install champi-ipc
+# Verify regions exist
+champi-ipc status --prefix my_app_
+
+# Clean up after a crashed producer
+champi-ipc cleanup --prefix my_app_
+
+# Dry run
+champi-ipc cleanup --prefix my_app_ --dry-run
 ```
 
-### Shared Memory Cleanup
+---
 
-If you encounter "File exists" errors, clean up orphaned regions:
-```bash
-champi-ipc cleanup --prefix my_app --signal-module my_app.signals.MySignals
-```
+## Reference
 
-### Signal Loss Warnings
-
-The library automatically detects signal loss. If you see warnings:
-1. Check your producer is not emitting too fast
-2. Increase your consumer poll rate
-3. Verify shared memory regions are accessible
-
-## Complete Example
-
-See `examples/basic_usage.py` for a complete working example of producer-consumer pattern.
-
-## Support
-
-For issues or questions:
-- Check the [API documentation](./API.md)
-- Review [examples](../examples/)
-- File an issue on GitHub
+- [API reference](./API.md)
+- [Troubleshooting](./TROUBLESHOOTING.md)
+- [Examples](../examples/)
