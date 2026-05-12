@@ -39,7 +39,7 @@ from champi_ipc.core.shared_memory_manager import SharedMemoryManager
 from champi_ipc.core.signal_processor import SignalProcessor
 from champi_ipc.core.signal_queue import SignalQueue, SignalQueueItem
 from champi_ipc.core.signal_reader import SignalReader
-from champi_ipc.utils.ack import get_ack_size, pack_ack, unpack_ack
+from champi_ipc.utils.ack import ACK_STRUCT, get_ack_size, pack_ack, unpack_ack
 from champi_ipc.utils.cleanup import (
     CleanupResult,
     cleanup_orphaned_regions,
@@ -73,7 +73,7 @@ from champi_ipc.utils.cleanup import (
 )
 
 __all__ = [
-   "__version__"
+    "__version__",
     # Core
     "SharedMemoryManager",
     "SignalProcessor",
@@ -89,11 +89,14 @@ __all__ = [
     "RegionNotFoundError",
     "RegionExistsError",
     "SignalTypeNotRegisteredError",
-    # Utilities
-    "cleanup_orphaned_regions",
-    "list_regions",
-    "get_region_info",
+    # ACK utilities
+    "ACK_STRUCT",
+    "get_ack_size",
     "pack_ack",
     "unpack_ack",
-    "get_ack_size"
+    # Cleanup utilities
+    "CleanupResult",
+    "cleanup_orphaned_regions",
+    "get_region_info",
+    "list_regions"
 ]
