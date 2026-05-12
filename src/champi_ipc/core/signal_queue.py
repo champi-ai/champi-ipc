@@ -1,124 +1,101 @@
-"""FIFO signal queue for ordered signal processing.
+"""Thread-safe FIFO queue for IPC signals."""
 
-Thread-safe queue that maintains signal order and generates sequence numbers.
-"""
+from __future__ import annotations
 
 import threading
 from collections import deque
-from typing import Any, TypeVar
-
-from champi_ipc.base.protocols import SignalTypeProtocol
-
-SignalT = TypeVar("SignalT", bound=SignalTypeProtocol)
+from typing import Any, SupportsInt
 
 
-class SignalQueueItem:
-    """Item in the signal queue.
+class SignalQueueItem[S: SupportsInt]:
+    """A single entry held inside :class:`SignalQueue`."""
 
-    Attributes:
-        signal_type: Type of signal
-        seq_num: Sequence number (monotonically increasing)
-        data: Signal-specific data as keyword arguments
-    """
-
-    def __init__(self, signal_type: SignalT, seq_num: int, **kwargs: Any):
-        """Initialize queue item.
+    def __init__(self, signal_type: S, seq_num: int, **kwargs: Any) -> None:
+        """Initialise queue item.
 
         Args:
-            signal_type: Type of signal
-            seq_num: Sequence number
-            **kwargs: Signal data
+            signal_type: Identifies the signal channel.
+            seq_num: Monotonic sequence number assigned at enqueue time.
+            **kwargs: Arbitrary signal payload fields.
         """
         self.signal_type = signal_type
         self.seq_num = seq_num
-        self.data = kwargs
+        self.data: dict[str, Any] = kwargs
 
 
-class SignalQueue:
-    """Thread-safe FIFO queue for signals.
+class SignalQueue[S: SupportsInt]:
+    """Thread-safe FIFO queue for typed IPC signals.
 
-    This queue maintains signal order and automatically assigns
-    sequence numbers. It's used by SignalProcessor to queue signals
-    before writing them to shared memory.
+    A bounded deque is used internally; when *maxsize* is reached the
+    oldest item is silently dropped (ring-buffer behaviour).
 
-    Example:
-        >>> queue = SignalQueue(maxsize=100)
-        >>> seq = queue.put(MySignals.MESSAGE, text="Hello")
-        >>> item = queue.get(timeout=1.0)
-        >>> print(item.seq_num, item.data)
-        1 {'text': 'Hello'}
+    Type parameter ``S`` must support conversion to ``int`` (any
+    ``IntEnum`` satisfies this bound).
+
+    Args:
+        maxsize: Maximum number of items to hold before dropping oldest entries.
     """
 
-    def __init__(self, maxsize: int = 100):
-        """Initialize signal queue.
+    def __init__(self, maxsize: int = 100) -> None:
+        """Initialise an empty queue.
 
         Args:
-            maxsize: Maximum queue size (older items dropped if exceeded)
+            maxsize: Maximum capacity.
         """
         self.maxsize = maxsize
-        self._queue: deque[SignalQueueItem] = deque(maxlen=maxsize)
+        self._queue: deque[SignalQueueItem[S]] = deque(maxlen=maxsize)
         self._lock = threading.Lock()
-        self._not_empty = threading.Condition(self._lock)
+        self._not_empty: threading.Condition = threading.Condition(self._lock)
         self._sequence_counter = 0
 
-    def put(self, signal_type: SignalT, **kwargs: Any) -> int:
-        """Add signal to queue.
+    def put(self, signal_type: S, **kwargs: Any) -> int:
+        """Enqueue a signal item and return its sequence number.
 
         Args:
-            signal_type: Type of signal
-            **kwargs: Signal data
+            signal_type: Identifies the signal channel.
+            **kwargs: Arbitrary signal payload forwarded to the queue item.
 
         Returns:
-            Sequence number assigned to this signal
-        """
-        with self._lock:
-            self._sequence_counter += 1
-            seq_num = self._sequence_counter
-
-            item = SignalQueueItem(signal_type, seq_num, **kwargs)
-            self._queue.append(item)
-
-            self._not_empty.notify()
-
-            return seq_num
-
-    def get(self, timeout: float | None = None) -> SignalQueueItem | None:
-        """Get next signal from queue (blocks if empty).
-
-        Args:
-            timeout: Timeout in seconds (None = wait forever)
-
-        Returns:
-            Signal queue item or None on timeout
+            The monotonically increasing sequence number assigned to the item.
         """
         with self._not_empty:
-            while len(self._queue) == 0:
-                if not self._not_empty.wait(timeout=timeout):
-                    return None  # Timeout
+            self._sequence_counter += 1
+            seq_num = self._sequence_counter
+            self._queue.append(SignalQueueItem(signal_type, seq_num, **kwargs))
+            self._not_empty.notify()
+            return seq_num
 
-            return self._queue.popleft()
+    def get(self, timeout: float | None = None) -> SignalQueueItem[S] | None:
+        """Dequeue the oldest item, blocking until one is available.
 
-    def get_nowait(self) -> SignalQueueItem | None:
-        """Get next signal without blocking.
+        Args:
+            timeout: Maximum seconds to wait.  ``None`` blocks indefinitely.
 
         Returns:
-            Signal queue item or None if empty
+            The oldest :class:`SignalQueueItem`, or ``None`` if *timeout*
+            elapsed before an item arrived.
+        """
+        with self._not_empty:
+            while not self._queue:
+                if not self._not_empty.wait(timeout=timeout):
+                    return None
+            return self._queue.popleft()
+
+    def get_nowait(self) -> SignalQueueItem[S] | None:
+        """Dequeue the oldest item without blocking.
+
+        Returns:
+            The oldest :class:`SignalQueueItem`, or ``None`` if the queue is empty.
         """
         with self._lock:
-            if len(self._queue) == 0:
-                return None
-            return self._queue.popleft()
+            return self._queue.popleft() if self._queue else None
 
     def size(self) -> int:
-        """Get current queue size.
-
-        Returns:
-            Number of items in queue
-        """
+        """Return the current number of items in the queue."""
         with self._lock:
             return len(self._queue)
 
     def clear(self) -> None:
-        """Clear all items from queue."""
+        """Remove all items from the queue."""
         with self._lock:
             self._queue.clear()

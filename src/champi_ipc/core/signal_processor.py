@@ -11,226 +11,261 @@ from typing import Any, TypeVar
 from blinker import Signal
 from loguru import logger
 
-from champi_ipc.base.protocols import SignalTypeProtocol
-from champi_ipc.core.shared_memory import SharedMemoryManager
+from champi_ipc.core.shared_memory_manager import SharedMemoryManager
 from champi_ipc.core.signal_queue import SignalQueue
 
-SignalT = TypeVar("SignalT", bound=SignalTypeProtocol)
+# Threshold: warn when ACK lags behind the last written sequence by more than
+# this many slots.
+_DEFAULT_LOSS_THRESHOLD = 3
 
-# Type alias for data mapper functions
 DataMapper = Callable[..., dict[str, Any] | None]
 
 
-class SignalProcessor:
-    """Bridges blinker signals to shared memory via FIFO queue.
+class SignalProcessor[S: SupportsInt]:
+    """Bridges blinker signals to shared memory via a thread-safe FIFO queue.
 
-    This class connects to blinker signals, queues them in a thread-safe
-    FIFO queue, and processes them in a background thread, writing to
-    shared memory.
+    A background thread continuously dequeues items and calls
+    :meth:`~champi_ipc.core.shared_memory_manager.SharedMemoryManager.write_signal`.
+    ACK-based signal-loss detection logs a warning whenever the consumer
+    falls more than *loss_threshold* sequence numbers behind.
 
-    Example:
-        >>> from blinker import signal
-        >>>
-        >>> # Create processor
-        >>> processor = SignalProcessor(memory_manager)
-        >>>
-        >>> # Connect signals
-        >>> my_signal = signal('my-signal')
-        >>> processor.connect_signal(
-        ...     my_signal,
-        ...     MySignals.SIGNAL_A,
-        ...     data_mapper=lambda text: {'text': text}
-        ... )
-        >>>
-        >>> # Start processing
-        >>> processor.start()
-        >>>
-        >>> # Emit signal (will be queued and written to shared memory)
-        >>> my_signal.send(text="Hello")
+    Type parameter ``S`` must support conversion to ``int`` (any ``IntEnum``
+    satisfies this bound).
+
+    Args:
+        memory_manager: Shared memory manager used for all reads and writes.
+        queue_maxsize: Capacity of the internal signal queue.
+        loss_threshold: Number of un-ACKed sequence numbers that triggers a
+            signal-loss warning.
     """
 
-    def __init__(self, memory_manager: SharedMemoryManager) -> None:
-        """Initialize signal processor.
+    def __init__(
+        self,
+        memory_manager: SharedMemoryManager[S],
+        queue_maxsize: int = 100,
+        loss_threshold: int = _DEFAULT_LOSS_THRESHOLD,
+    ) -> None:
+        """Initialise the signal processor.
 
         Args:
-            memory_manager: Shared memory manager for writing signals
+            memory_manager: Shared memory manager instance.
+            queue_maxsize: Maximum items held in the internal queue.
+            loss_threshold: ACK-lag threshold above which a warning is emitted.
         """
-        self.memory_manager = memory_manager
-        self.queue = SignalQueue(maxsize=100)
-        self.running = False
-        self.processor_thread: threading.Thread | None = None
-        self.connected_signals: list[tuple[Signal, Callable]] = []
+        self._memory_manager = memory_manager
+        self._queue: SignalQueue[S] = SignalQueue(maxsize=queue_maxsize)
+        self._loss_threshold = loss_threshold
+        self._running = False
+        self._thread: threading.Thread | None = None
+        self._connected: list[tuple[Signal, Callable[..., None]]] = []
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def connect_signal(
         self,
         signal: Signal,
-        signal_type: SignalT,
+        signal_type: S,
         data_mapper: DataMapper | None = None,
     ) -> None:
-        """Connect a blinker signal to the processor.
+        """Subscribe *signal* so that each emission enqueues a work item.
 
         Args:
-            signal: Blinker signal to connect
-            signal_type: Signal type enum value
-            data_mapper: Optional function to map signal kwargs to queue data
-                        Signature: (sender, **kwargs) -> dict | None
-                        Return None to skip queueing this signal
-
-        Example:
-            >>> # Simple mapper extracting specific fields
-            >>> def mapper(text, **kwargs):
-            ...     return {'text': text[:100]}  # Truncate to 100 chars
-            >>>
-            >>> processor.connect_signal(my_signal, MySignals.TEXT, mapper)
+            signal: Blinker signal to connect.
+            signal_type: Identifies the target shared memory channel.
+            data_mapper: Optional callable that transforms the raw signal
+                ``**kwargs`` into the dict passed to :meth:`SignalQueue.put`.
+                Return ``None`` to discard an emission.
         """
 
-        def signal_handler(sender, **kwargs):
-            # Map signal data if mapper provided
-            if data_mapper:
-                queue_data = data_mapper(**kwargs)
-                # Skip if mapper returns None
-                if queue_data is None:
+        def _handler(sender: Any, **kwargs: Any) -> None:
+            if data_mapper is not None:
+                payload = data_mapper(**kwargs)
+                if payload is None:
                     return
             else:
-                queue_data = kwargs
+                payload = kwargs
 
-            # Add to queue
-            seq_num = self.queue.put(signal_type, **queue_data)
+            seq = self._queue.put(signal_type, **payload)
             logger.debug(
-                f"Queued {signal_type.name} (seq: {seq_num}, queue: {self.queue.size()})"
+                "Queued signal {} (seq={}, queue_size={})",
+                _type_name(signal_type),
+                seq,
+                self._queue.size(),
             )
 
-        signal.connect(signal_handler, weak=False)
-        self.connected_signals.append((signal, signal_handler))
-
-        logger.info(f"Connected signal processor for {signal_type.name}")
+        signal.connect(_handler, weak=False)
+        self._connected.append((signal, _handler))
+        logger.info("Connected signal processor for {}", _type_name(signal_type))
 
     def start(self) -> None:
-        """Start processing signals from queue.
-
-        Launches background thread that pulls from queue and writes to
-        shared memory.
-        """
-        if self.running:
-            logger.warning("Signal processor already running")
+        """Start the background processing thread."""
+        if self._running:
+            logger.warning("SignalProcessor is already running")
             return
 
-        self.running = True
-        self.processor_thread = threading.Thread(
-            target=self._process_loop, daemon=True, name="SignalProcessor"
+        self._running = True
+        self._thread = threading.Thread(
+            target=self._process_loop,
+            daemon=True,
+            name="SignalProcessor",
         )
-        self.processor_thread.start()
-
-        logger.info("Signal processor started")
+        self._thread.start()
+        logger.info("SignalProcessor started")
 
     def stop(self) -> None:
-        """Stop processing signals.
+        """Stop the background thread and disconnect all signal handlers.
 
-        Waits up to 2 seconds for processor thread to finish current item.
+        Blocks until the thread exits or a 2-second timeout elapses.
         """
-        self.running = False
+        self._running = False
+        self.disconnect_all()
 
-        if self.processor_thread:
-            self.processor_thread.join(timeout=2.0)
-            self.processor_thread = None
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                logger.warning("SignalProcessor thread did not stop within timeout")
+            self._thread = None
 
-        logger.info("Signal processor stopped")
+        logger.info("SignalProcessor stopped")
+
+    def disconnect_all(self) -> None:
+        """Disconnect every registered signal handler."""
+        for sig, handler in self._connected:
+            sig.disconnect(handler)
+        self._connected.clear()
+        logger.info("Disconnected all signal handlers")
+
+    # ------------------------------------------------------------------
+    # Context manager support
+    # ------------------------------------------------------------------
+
+    def __enter__(self) -> SignalProcessor[S]:
+        """Start the processor and return self."""
+        self.start()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object,
+    ) -> None:
+        """Stop the processor on context exit."""
+        self.stop()
+
+    # ------------------------------------------------------------------
+    # Background thread
+    # ------------------------------------------------------------------
 
     def _process_loop(self) -> None:
-        """Main processing loop - pulls from queue and writes to shared memory.
-
-        Runs in background thread until stop() is called.
-        """
+        """Dequeue items and write them to shared memory."""
         consecutive_errors = 0
         max_consecutive_errors = 10
 
-        while self.running:
-            # Get next item from queue (blocks with timeout)
+        while self._running:
             try:
-                item = self.queue.get(timeout=0.5)
-
-                if item is None:
-                    continue  # Timeout, check if still running
-
-                # Reset error counter on successful get
-                consecutive_errors = 0
-
-            except Exception as e:
-                logger.error(f"Error getting item from queue: {e}")
+                item = self._queue.get(timeout=0.5)
+            except Exception as exc:
+                logger.error("Error dequeuing item: {}", exc)
                 consecutive_errors += 1
                 if consecutive_errors >= max_consecutive_errors:
                     logger.critical(
-                        f"Too many consecutive queue errors ({consecutive_errors}), stopping"
+                        "Too many consecutive queue errors ({}), stopping processor",
+                        consecutive_errors,
                     )
-                    self.running = False
+                    self._running = False
                 continue
 
+            if item is None:
+                continue
+
+            consecutive_errors = 0
+
             try:
-                # Check ACK to detect missed signals
-                try:
-                    ack_seq = self.memory_manager.read_ack(item.signal_type)
-                except ValueError as e:
-                    logger.error(f"Failed to read ACK for {item.signal_type.name}: {e}")
-                    ack_seq = 0  # Assume no ACK
-
-                expected_ack = item.seq_num - 1
-
-                if ack_seq < expected_ack:
-                    missed_count = expected_ack - ack_seq
-                    logger.warning(
-                        f"⚠️  Signal loss for {item.signal_type.name}: "
-                        f"Reader at {ack_seq}, writing {item.seq_num} "
-                        f"({missed_count} signals skipped)"
-                    )
-
-                # Pack signal data into binary struct
-                try:
-                    packed_data = self.memory_manager.registry.pack(
-                        item.signal_type, item.seq_num, **item.data
-                    )
-                except (ValueError, KeyError, TypeError) as e:
-                    logger.error(
-                        f"Failed to pack signal {item.signal_type.name} (seq: {item.seq_num}): {e}. "
-                        f"Data: {item.data}"
-                    )
-                    continue
-
-                # Write to shared memory
-                try:
-                    self.memory_manager.write_signal(item.signal_type, packed_data)
-                    logger.debug(
-                        f"Wrote {item.signal_type.name} to shared memory (seq: {item.seq_num})"
-                    )
-                except ValueError as e:
-                    logger.error(
-                        f"Failed to write signal {item.signal_type.name} to shared memory: {e}"
-                    )
-                    continue
-
-            except Exception as e:
+                self._handle_item(item.signal_type, item.seq_num, item.data)
+            except Exception as exc:
                 logger.error(
-                    f"Unexpected error processing signal {item.signal_type.name}: {e}",
+                    "Unexpected error processing signal {}: {}",
+                    _type_name(item.signal_type),
+                    exc,
                     exc_info=True,
                 )
                 consecutive_errors += 1
                 if consecutive_errors >= max_consecutive_errors:
                     logger.critical(
-                        f"Too many consecutive processing errors ({consecutive_errors}), stopping"
+                        "Too many consecutive processing errors ({}), stopping processor",
+                        consecutive_errors,
                     )
-                    self.running = False
+                    self._running = False
 
-    def disconnect_all(self) -> None:
-        """Disconnect all signal handlers."""
-        for signal, handler in self.connected_signals:
-            signal.disconnect(handler)
+    def _handle_item(self, signal_type: S, seq_num: int, data: dict[str, Any]) -> None:
+        """Process a single dequeued item.
 
-        self.connected_signals.clear()
-        logger.info("Disconnected all signal handlers")
+        Args:
+            signal_type: Signal channel identifier.
+            seq_num: Sequence number of the item.
+            data: Payload dict forwarded to the pack callable.
+        """
+        # ACK-based signal-loss detection.
+        try:
+            ack_seq = self._memory_manager.read_ack(signal_type)
+        except Exception as exc:
+            logger.error("Failed to read ACK for {}: {}", _type_name(signal_type), exc)
+            ack_seq = 0
 
-    def __enter__(self) -> "SignalProcessor":
-        self.start()
-        return self
+        lag = (seq_num - 1) - ack_seq
+        if lag > self._loss_threshold:
+            logger.warning(
+                "Potential signal loss for {}: ACK at seq {}, writing seq {} ({} signals may be skipped)",
+                _type_name(signal_type),
+                ack_seq,
+                seq_num,
+                lag,
+            )
+        elif lag > 0:
+            logger.debug(
+                "Consumer slightly behind for {}: {} signal(s) pending",
+                _type_name(signal_type),
+                lag,
+            )
 
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        self.stop()
-        self.disconnect_all()
+        # Serialise and write.
+        try:
+            packed = self._memory_manager._registry.pack(signal_type, **data)
+        except (ValueError, KeyError, TypeError) as exc:
+            logger.error(
+                "Failed to pack signal {} (seq={}): {}  data={}",
+                _type_name(signal_type),
+                seq_num,
+                exc,
+                data,
+            )
+            return
+
+        try:
+            self._memory_manager.write_signal(signal_type, packed)
+            logger.debug(
+                "Wrote {} to shared memory (seq={})",
+                _type_name(signal_type),
+                seq_num,
+            )
+        except (KeyError, ValueError) as exc:
+            logger.error(
+                "Failed to write signal {} to shared memory: {}",
+                _type_name(signal_type),
+                exc,
+            )
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _type_name(signal_type: SupportsInt) -> str:
+    """Return a human-readable name for *signal_type*.
+
+    Uses ``.name`` when available (IntEnum), otherwise falls back to ``repr``.
+    """
+    return getattr(signal_type, "name", repr(signal_type))
